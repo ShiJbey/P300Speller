@@ -1,6 +1,9 @@
 # speller_gui.py
 
 import os
+from p300_speller import EEGEpoch
+import timeit
+import time
 import Tkinter as tk
 
 class SelectionRectangle():
@@ -36,7 +39,7 @@ class SelectionRectangle():
     def is_vertical(self):
         return self.length > self.width
     
-    def update(self):
+    def update(self, row_data, col_data):
         if self.is_vertical():
             self.move_horizontal(self.width)
             if self.x + self.width > self.max_x:
@@ -47,8 +50,20 @@ class SelectionRectangle():
             if self.y + self.length > self.max_y:
                 self.y = 0
                 self.rotate90()
-        #root.after(UPDATE_RATE, self.update())
 
+        if self.is_vertical():
+            #print("Current Col: %d" %(int(self.x / self.width)))
+            epoch = EEGEpoch(timeit.default_timer())
+            epochs = col_data[int(self.x / self.width)]
+            epochs["active"].append(epoch)
+            col_data[int(self.x / self.width)] = epochs
+        else:
+            #print("Current Row %d" %(int(self.y / self.length)))
+            epoch = EEGEpoch(timeit.default_timer())
+            epochs = row_data[int(self.y / self.length)]
+            epochs["active"].append(epoch)
+            row_data[int(self.y / self.length)] = epochs
+        time.sleep(.08)
 
     def draw(self, canvas):
         """Draws the rectange to a Tkinter canvas"""
@@ -85,9 +100,11 @@ class SuggestedWord(tk.Label):
     
 class P300GUI(tk.Frame):
 
-    def __init__(self, master, thread):
+    def __init__(self, master, row_data, col_data, update_rate=100):
         tk.Frame.__init__(self, master)
-        self.thread = thread
+        self.row_data = row_data
+        self.col_data = col_data
+        self.update_rate = update_rate
         self.master["bg"] = '#001c33'
         self["bg"] = '#001c33'
         self.suggested_words = [None,None,None]
@@ -99,9 +116,9 @@ class P300GUI(tk.Frame):
 
     def update(self):
         self.selection_rect.draw(self.canvas)
-        self.selection_rect.update()
-        #self.master.after(100, self.selection_rect.update)
-        self.master.after(100, self.update)
+        self.selection_rect.update(self.row_data, self.col_data)
+        self.master.after(self.update_rate, self.update)
+        
 
     def draw(self):
         self.selection_rect.draw(self.canvas)
@@ -149,7 +166,7 @@ class P300GUI(tk.Frame):
         self.text_buffer["fg"] = '#ffffff'
         self.text_buffer["bg"] = '#000000'
         self.text_buffer["pady"] = 30
-
+        
         self.suggested_word_pane = tk.Frame(self)
         self.suggested_word_pane.grid(pady=10)
         
@@ -189,6 +206,6 @@ class P300GUI(tk.Frame):
         self.send_button = tk.Button(self.bottom_button_pane, text='send', height=1, width=6)
         self.send_button.grid(row=0,column=2)
 
-        self.exit_button = tk.Button(self.bottom_button_pane, text='exit', command=self.thread.exitApp, height=1, width=6)
+        self.exit_button = tk.Button(self.bottom_button_pane, text='exit', command=self.master.quit, height=1, width=6)
         self.exit_button.grid(row=0,column=3)
        

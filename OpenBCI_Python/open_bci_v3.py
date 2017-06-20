@@ -30,7 +30,7 @@ import glob
 
 SAMPLE_RATE = 250.0  # Hz
 START_BYTE = 0xA0  # start of data packet
-END_BYTE = 0xC0  # end of data packet (Default is 0xC0)
+END_BYTE = 0xC0  # end of data packet
 ADS1299_Vref = 4.5  #reference voltage for ADC in ADS1299.  set by its hardware
 ADS1299_gain = 24.0  #assumed gain setting for ADS1299.  set by its Arduino code
 scale_fac_uVolts_per_count = ADS1299_Vref/float((pow(2,23)-1))/ADS1299_gain*1000000.
@@ -68,13 +68,11 @@ class OpenBCIBoard(object):
   """
 
   def __init__(self, port=None, baud=115200, filter_data=True,
-    scaled_output=True, daisy=False, aux=False, impedance=False, log=True, timeout=None, thread=None):
+    scaled_output=True, daisy=False, aux=False, impedance=False, log=True, timeout=None):
     self.log = log # print_incoming_text needs log
     self.streaming = False
     self.baudrate = baud
     self.timeout = timeout
-    # CUSTOM
-    self.thread = thread
     if not port:
       port = self.find_port()
     self.port = port
@@ -87,8 +85,7 @@ class OpenBCIBoard(object):
 
     time.sleep(2)
     #Initialize 32-bit board, doesn't affect 8bit board
-    self.ser.write(b'v')
-    self.ser.write(b'<')
+    self.ser.write(b'v');
 
     #wait for device to be ready
     time.sleep(1)
@@ -159,15 +156,12 @@ class OpenBCIBoard(object):
       callback: A callback function -- or a list of functions -- that will receive a single argument of the
           OpenBCISample object captured.
     """
-    streaming_start_time = None
     if not self.streaming:
       self.ser.write(b'b')
       self.streaming = True
-      # CUSTOM ADDITION: We want to get a starting time stamp for streaming
-      streaming_start_time = timeit.default_timer()  
 
-    #start_time = timeit.default_timer()
-    start_time = time.time()
+    start_time = timeit.default_timer()
+
     # Enclose callback funtion in a list if it comes alone
     if not isinstance(callback, list):
       callback = [callback]
@@ -176,16 +170,15 @@ class OpenBCIBoard(object):
     #Initialize check connection
     self.check_connection()
 
-    # CUSTOM ADDITION: Manages how many times the sample.ids have looped back to 0
-    times_looped = 0
+    read_time = -1;
 
     while self.streaming:
 
       # read current sample
       sample = self._read_serial_binary()
-      # CUSTOM ADDITION: sets the time stamp for the sample based on the id and start time
-      sample.time_stamp = timeit.default_timer()
-      #sample.time_stamp = start_time + ((1/SAMPLE_RATE) * sample.id) + (times_looped * 256)
+      # CUSTOM CHANGE
+      if (sample):
+        sample.read_time = timeit.default_timer()
       # if a daisy module is attached, wait to concatenate two samples (main board + daisy) before passing it to callback
       if self.daisy:
         # odd sample: daisy sample, save for later
@@ -206,6 +199,8 @@ class OpenBCIBoard(object):
         self.stop();
       if self.log:
         self.log_packet_count = self.log_packet_count + 1;
+
+    print("No longer streaming")
   
   
   """
@@ -274,21 +269,6 @@ class OpenBCIBoard(object):
 
         self.read_state = 2;
 
-      #---------Time Stamp Data------------
-#      elif self.read_state == 2:
-#        aux_data = []
-#        # We need to read bothe of the bytes of
-#        # user-defined data first
-#        user_data = struct.unpack('BB', read(2))
-#        aux_data.append(user_data[0])
-#        aux_data.append(user_data[1])
-#        # Now the remaining 4 bytes represent time
-#        # unsigned int is "I" <= Refer to format strings
-#        time_stamp = struct.unpack('>I', read(4))[0]
-#        aux_data.append(time_stamp)
-#        self.read_state = 3;
-
-
       #---------Accelerometer Data---------
       elif self.read_state == 2:
         aux_data = []
@@ -304,7 +284,6 @@ class OpenBCIBoard(object):
               aux_data.append(acc)
 
         self.read_state = 3;
-  
       #---------End Byte---------
       elif self.read_state == 3:
         val = struct.unpack('B', read(1))[0]
@@ -630,11 +609,12 @@ class OpenBCIBoard(object):
 
 class OpenBCISample(object):
   """Object encapulsating a single sample from the OpenBCI board. NB: dummy imp for plugin compatiblity"""
-  def __init__(self, packet_id, channel_data, aux_data, time_stamp=-1):
+  def __init__(self, packet_id, channel_data, aux_data, read_time=-1):
     self.id = packet_id
     self.channel_data = channel_data
     self.aux_data = aux_data
     self.imp_data = []
-    self.time_stamp = time_stamp
+    # CUSTOM CHANGE
+    self.read_time = read_time
 
 

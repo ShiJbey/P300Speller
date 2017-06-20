@@ -10,149 +10,200 @@ import logging
 import time
 import threading
 import Tkinter as tk
+from multiprocessing import Process, Manager, Value
+import numpy as np
+import copy
 
-   
-class P300Speller:
-    """
-    P300Speller allows some one to spell via the
-    use of an OpenBCI.
-    This p300 speller application runs as 3 threads:
-    a main, an EEGProcessingThread, and a GUIThread.
-    """
+# Default port to be used
+PORT = '/dev/ttyUSB0'
+# OpenBCI Board Reference
+BCI_BOARD = None
+
+# Create a manager for keeping track of sample data and gui updates
+manager = Manager()
     
-    def __init__(self, eeg_thread=None, gui_thread=None):
-        self.spelling_buffer = ""       # Buffer where selected characters are concatenated
-        self.eeg_thread = eeg_thread    # Reference to the EEGProcessingThread
-        self.gui_thread = gui_thread    # Reference to the GUIThread
-        self.select_rect_history = []   # History of past selection rect info ("orientation",pos,time)
-        self.rect_history_lock = threading.Lock()   # Synchronization lock
-        self.eeg_data_history = []                  # Not sure how this is going to be stored
-        self.eeg_data_lock = threading.Lock()       # Synchronization lock
-        self.estimated_position = (-1,-1)           # Estimated position of the desired character
-        self.row_trials = 0     # Number of row trials for this estimation
-        self.col_trials = 0     # Number of column trials for this esitmation
+# Dictionary of times mapped to samples
+DATA_HISTORY = manager.dict()
+update_times = manager.list()
+
+# Thread-safe dictionary for row epochs
+ROW_DATA = manager.dict()
+# Thread-safe dictionary for col epochs
+COL_DATA = manager.dict()
+
+EPOCH_LENGTH = 1 #time in seconds
+
+class EEGEpoch:
+    """Manages EEG epoch data"""
     
-    def set_gui_thread(self, thread):
-        self.gui_thread = thread
-        thread.speller = self
+    def __init__(self, start_time):
+        self.start_time = start_time
+        # 2D array of samples and channel data
+        self.sample_data = []
+        # Are we collecting data for this Epoch
+        self.active = True
 
-    def set_eeg_thread(self, thread):
-        self.eeg_thread = thread
-        thread.speller = self
-
-    def start(self):
-        """Starts all threads"""
-        if (self.eeg_thread):
-            self.eeg_thread.start()
-        if (self.gui_thread):
-            self.gui_thread.start()
-
-        # Program runs while gui is active
-        while self.gui_thread.is_alive():
-            x = 1 + 1
+    def is_within_epoch(self, time):
+        """Returns true if the given time is within this given epoch"""
+        return (time >= self.start_time) and (time <= self.start_time + EPOCH_LENGTH)
         
-        # Close the program
-        self.stop()
+    def update(self, sample_data):
+        """Appends the given sample data to the list of channel_data"""
+        self.sample_data.append(sample_data)
 
-    def stop(self):
-        print("Main is closing app")
-        self.eeg_thread.stop()
-        self.eeg_thread.join()
-        exit()
+    def average(self):
+        arr = np.array(self.sample_data)
+        self.sample_data = np.mean(arr, axis=0)
 
-class EEGProcessingThread(threading.Thread):
-    """Thread responsible for running the EEG processing """
-
-    def __init__(self, thread_id, name, bci_board, speller=None):
-        super(EEGProcessingThread, self).__init__()
-        self.thread_id = thread_id
-        self.name = name
-        self.speller = speller # Reference to the P300Speller in the main
-        self.bci_board = bci_board
-        self.stop_event = threading.Event()
-
-    def stop(self):
-        self.stop_event.set()
-
-    def stopped(self):
-        return self.stop_event.isSet()
-    
-    def print_data(self, sample):
-        if self.stopped():
-            seld.bci_board.streaming = False
-            #self.bci_board.ser.write('s')
-        print(sample.channel_data)
+    def __str__(self):
+        return "Start: %s \nActive?: %s \nNum Samples: %s" %(self.start_time,self.active, len(self.sample_data))
  
 
-    def run(self):
-        baud = 115200
-        logging.basicConfig(filename="p300SpellerLog.txt",
-            format='%(asctime)s - %(levelname)s : %(message)s',
-            level=logging.DEBUG)
-        logging.info('============== LOG START ==============')
-        print("Board Connected")
-        self.bci_board.ser.write('v')
-        time.sleep(10)
-        self.bci_board.start_streaming(self.print_data)
+def get_epoch(start_time):
+    """
+    Loops through the data history and returns an epoch Object with the
+    data that fell within this epoch
+    """
+    #print("Length of data in get_epoch: %d" %(len(DATA_HISTORY)))
+    epoch = EEGEpoch(start_time)
+    for k in DATA_HISTORY.keys():
+        if (epoch.is_within_epoch(k)):
+            epoch.update(copy.copy(DATA_HISTORY[k]))
+    #print("Length of data in get_epoph epoch: %d" %(len(epoch.sample_data)))
+    return epoch
 
-# Running the GUI in its own thread free's up the main application
-class GUIThread(threading.Thread):
-    """Thread that runs the GUI"""
+def print_data(sample):
+    """Prints the data within the sample"""
+    if (BCI_BOARD.streaming == True):
+        print(vars(sample))
 
-    def __init__(self, thread_id, name, speller=None,
-            rect_update_rate_milis=10, suggestion1_flash_rate=3,
-            suggestion2_flash_rate=1, suggestion3_flash_rate=5):
-        threading.Thread.__init__(self)
-        self.thread_id = thread_id
-        self.name = self.name
-        self.speller = speller
-        self.speller_gui = None;
-        self.root = None;
+def update_data_history(sample):
+    """Adds the sample channel data to the dict under its read time"""
+    # Adds all data samples to the dict under read times
+    DATA_HISTORY[sample.read_time] = sample.channel_data
+    """
+    for index in ROW_DATA.keys():
+        row = ROW_DATA[index]
+        for epoch in row["active"]:
+            if (epoch.is_within_epoch(sample.read_time)):
+                #epoch.update(sample.channel_data)
+            else:
+                epoch.active = False
+                #epoch.sample_data = get_epoch(epoch.start_time).sample_data
+                #epoch.average()
+                row["past"].append(epoch)
+                row["active"].remove(epoch)
+        ROW_DATA[index] = row
 
-    def exitApp(self):
-        print("Closing App")
-        self.root.quit()
-        self.speller.stop()
+    for index in COL_DATA.keys():
+        col = ROW_DATA[index]
+        for epoch in col["active"]:
+            if (epoch.is_within_epoch(sample.read_time)):
+                #epoch.update(sample.channel_data)
+            else:
+                epoch.active = False
+                #epoch.sample_data = get_epoch(epoch.start_time).sample_data
+                #epoch.average()
+                col["past"].append(epoch)
+                col["active"].remove(epoch)
+        COL_DATA[index] = col
+    """
+    
+def run_eeg(bci_board, history_dict):
+    """Starts streaming data from the OpenBCI board and updating the history"""
+    logging.basicConfig(filename="p300SpellerLog.txt",
+        format='%(asctime)s - %(levelname)s : %(message)s',
+        level=logging.DEBUG)
+    logging.info('============== LOG START ==============')
+    print("Board Connected")
+    bci_board.ser.write('v')
+    time.sleep(5)
+    bci_board.start_streaming(update_data_history)
+    
+def run_gui(row_data, col_data, rect_update_rate_millis=100):
+    """Starts the p300 speller gui"""
+    root = tk.Tk()
+    root.title("P300 Speller")
+    root.protocol("WM_DELETE_WINDOW", root.quit)
+    # Pass the epoch data dicts to the gui for updating
+    speller_gui = gui.P300GUI(root, row_data, col_data, update_rate=rect_update_rate_millis)
+    root.mainloop()
 
-    def run(self):
-        print("Running GUI")
-        self.root = tk.Tk()
-        self.root.title("P300 Speller")
-        self.root.protocol("WM_DELETE_WINDOW", self.exitApp)
-        self.speller_gui = gui.P300GUI(self.root, self)
-        self.root.mainloop()
-
-
-
-# We should either:
-# 1) Wait for the connection for the board to start the GUI
-# 2) Start the GUI, but do not issue updates until connection found
-# 3) Start the GUI, and have an intermediate screen that has a
-#    button that becomes active only when the connection has been
-#    established.
-#
-# Option 1, is implemented below
-
+"""
+This module runs the p-300 speller using multiple processes.
+Processes are spawned for the main module, the eeg data
+collection, and the GUI. The eeg_process is responsible for
+sending sample data to the data buffer managed by the main module.
+The gui process is responsible for updating the gui and recording
+times when the gui has been updated
+"""
 if __name__ == '__main__':
-    port = '/dev/ttyUSB0'
+    # Change default port if a new one was given
+    if (len(sys.argv) == 2):
+        PORT =  str(sys.argv[1])
+
+    # Create reference to the OpenBCI board
+    BCI_BOARD = bci.OpenBCIBoard(port=PORT, scaled_output=False, log=True)
+
+
+    ROW_DATA[0] = manager.dict({"active":[], "past":[]});
+    ROW_DATA[1] = manager.dict({"active":[], "past":[]});
+    ROW_DATA[2] = manager.dict({"active":[], "past":[]});
+    ROW_DATA[3] = manager.dict({"active":[], "past":[]});
+    ROW_DATA[4] = manager.dict({"active":[], "past":[]});
+    ROW_DATA[5] = manager.dict({"active":[], "past":[]});
+
+    # Thread-safe dictionary for column epochs
     
-    speller = P300Speller()
-        
-    speller.set_eeg_thread(EEGProcessingThread(1, "open-bci", bci.OpenBCIBoard(port=port, scaled_output=False, log=True)))
+    COL_DATA[0] = {"active":[], "past":[]}; COL_DATA[1] = {"active":[], "past":[]};
+    COL_DATA[2] = {"active":[], "past":[]}; COL_DATA[3] = {"active":[], "past":[]};
+    COL_DATA[4] = {"active":[], "past":[]}; COL_DATA[5] = {"active":[], "past":[]};
+
+    # Create processes for the GUI and the EEG collection
+    eeg_process = Process(target=run_eeg, args=(BCI_BOARD, DATA_HISTORY))
+    eeg_process.daemon = True
+    gui_process = Process(target=run_gui, args=(ROW_DATA,COL_DATA))
+
+    # Start processes
+    eeg_process.start()
+    gui_process.start()
+
+    # Wait for gui process to finish
+    gui_process.join()
     
-    
-    speller.set_gui_thread(GUIThread(2,"gui"))
-    #speller.gui_thread.start()
-    #speller.eeg_thread.start()
-    speller.start()
+    # Now we set the board to stop streaming
+    print("Stopping board")
+    BCI_BOARD.stop()
+    BCI_BOARD.disconnect()
+
+    # ====== TESTING EPOCH SEPARATION ======
+    print(len(DATA_HISTORY))
+
+    # Fill all the epochs
+    for row in ROW_DATA.keys():
+        for status in ROW_DATA[row].keys():
+           for i, ep in enumerate(ROW_DATA[row][status]):
+               all_data = get_epoch(ep.start_time).sample_data
+               ep.sample_data = all_data[:]
+               print(ep)
     
     """
-    except:
-        # Catches the exeption thrown when the bci board
-        # can't be found
-        print("Could not connect to OpenBCI board")
+    # Fill epochs with data samples
+    try:
+        it = iter(ROW_DATA[0]["active"])
+        while(1):
+            ep = it.next()
+            all_data = copy.copy(get_epoch(ep.start_time).sample_data)
+            ep.sample_data = all_data
+            #print(ep)
+    except StopIteration:
+        pass
     """
+    print("\n\n")
 
-
-
-
+    # Print epochs for the first row
+    for row in ROW_DATA.keys():
+        for status in ROW_DATA[row].keys():
+           for i, ep in enumerate(ROW_DATA[row][status]):
+               print (ep)
+    
