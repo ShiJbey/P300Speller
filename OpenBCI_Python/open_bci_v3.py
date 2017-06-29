@@ -199,8 +199,6 @@ class OpenBCIBoard(object):
         self.stop();
       if self.log:
         self.log_packet_count = self.log_packet_count + 1;
-
-    print("No longer streaming")
   
   
   """
