@@ -1,41 +1,42 @@
-import os
-from p300_speller import EEGEpoch
-import timeit
 import time
 import random
 import Tkinter as tk
 import pylsl
+from p300_speller import EEGEpoch
 import config
 
 class SelectionRectangle():
-    """
-    Class to maintain information related to the rectangle
-    used to select chaacters on the screen
-    """
-
-    def __init__(self, root, x=0, y=0, length=10, width=10,
-            color="#ffffff", max_x=100, max_y=100):
-        self.root = root
-        self.x = x
-        self.y = y
-        self.length = length
-        self.width = width
-        self.graphic_ref = None
-        self.color = color
-        self.max_x = max_x
-        self.max_y = max_y
-        self.remaining_rows = []
-        self.remaining_cols = []
+    """Manages the rectangle that highlights the characters in the grid"""
+    def __init__(self, x, y, length, width, max_x, max_y, color="#ffffff"):
+        self.x = x                  # X-position of the rectangle (top-left corner)
+        self.y = y                  # Y-position of the rectangle (top-left corner)
+        self.length = length        # How long, in the y-direction is the rectangle
+        self.width = width          # How long, in the x-direction is the rectangle
+        self.graphic_ref = None     # Reference to the graphical rect on the canvas 
+        self.color = color          # Color of the rectangle
+        self.max_x = max_x          # Max x-position that the rectangle may occupy
+        self.max_y = max_y          # Max y-position that the rectangle may occupy
+        self.remaining_rows = range(6)  # List of possible rows for the rect to move to
+        self.remaining_cols = range(6)  # List of possible columns for the rect to move to
+        self.visible = True         # Is the rectangle currently made visible on the screen 
 
     def move_to_col(self, index):
-        if (self.is_vertical()):
-            self.x = index * self.width
-        y = 0
+        """Moves and re-orients the rectangle to a column specified by an index"""
+        # Reorient the rectangle to be vertical
+        if not self.is_vertical():
+            self.rotate90()
+        # Set the rectangle to the proper position    
+        self.x = index * self.width
+        self.y = 0
 
     def move_to_row(self, index):
-        if (not self.is_vertical()):
-            self.y = index * self.length
-        x = 0
+        """Moves and re-orients the rectangle to a row specified by an index"""
+        # Reorient the rectangle to be horizontal 
+        if self.is_vertical():
+            self.rotate90()
+        # Set the rectangel to the proper position
+        self.y = index * self.length
+        self.x = 0
             
     def rotate90(self):
         """Rotates the rectangle 90 degrees"""
@@ -54,37 +55,60 @@ class SelectionRectangle():
     def is_vertical(self):
         """Returns true if the rectangle is oriented vertically"""
         return self.length > self.width
+
+    def refill_available_rcs(self):
+        """Refills the lists of available rows and columns with index values"""
+        self.remaining_rows = range(6)
+        self.remaining_cols = range(6)
     
+    def select_rand_row(self):
+        """Selects a row from the available_rows"""
+        rand_index = random.randint(0, len(self.remaining_rows) - 1)
+        row = self.remaining_rows[rand_index]
+        return row
+    
+    def select_rand_col(self):
+        """Selects a random column from the available_cols"""
+        rand_index = random.randint(0, len(self.remaining_cols) - 1)
+        col = self.remaining_cols[rand_index]
+        return col
+    
+    def end_of_sequence(self):
+        """Returns true if there are no more available moves for the rect"""
+        return len(self.remaining_cols) == 0 and len(self.remaining_rows) == 0
+
     def update(self, row_epoch_queue, col_epoch_queue):
         """Moves the recangle by one row or column and creates epoch"""
-        
-        if config.RANDOM_HIGHLIGHT: 
-            # Takes care of rotating the rectangle when necessary
-            if (len(self.remaining_cols) == 0 and self.is_vertical() and
-                len(self.remaining_rows) == 0):
-                # Make the rectangle horizontal
-                self.rotate90()
-                self.remaining_rows = range(6)
-            elif (len(self.remaining_rows) == 0 and len(self.remaining_cols) == 0 and
-                  not self.is_vertical()):
-                # Make rect vertical
-                self.rotate90()
-                self.remaining_cols = range(6)
+        # Move the rectangle by randomly selecting a row or column
+        if config.RANDOM_HIGHLIGHT:
+            # The remaining columns and row lists need to be refilled
+            if self.end_of_sequence():
+                self.refill_available_rcs()
 
-            # Moves the rectangle to its next position
-            if (self.is_vertical()):
-                self.y = 0
-                randIndex = random.randint(0, len(self.remaining_cols) - 1)
-                nextCol = self.remaining_cols[randIndex]
-                self.move_to_col(nextCol)
-                self.remaining_cols.remove(nextCol)
-            else:
-                self.x = 0
-                randIndex = random.randint(0, len(self.remaining_rows) - 1)
-                nextRow = self.remaining_rows[randIndex]
-                self.move_to_row(nextRow)
-                self.remaining_rows.remove(nextRow)
+            # Freely choose between available rows and columns
+            if len(self.remaining_cols) > 0 and len(self.remaining_rows) > 0:
+                if random.random() > 0.5:
+                    next_col = self.select_rand_col()
+                    self.move_to_col(next_col)
+                    self.remaining_cols.remove(next_col)
+                else:
+                    next_row = self.select_rand_row()
+                    self.move_to_row(next_row)
+                    self.remaining_rows.remove(next_row)
 
+            # Only rows are available to chose from
+            elif len(self.remaining_cols) == 0:
+                next_row = self.select_rand_row()
+                self.move_to_row(next_row)
+                self.remaining_rows.remove(next_row)
+
+            # Only columns are available to chose from
+            elif len(self.remaining_rows) == 0:
+                next_col = self.select_rand_col()
+                self.move_to_col(next_col)
+                self.remaining_cols.remove(next_col)
+
+        # Move linearly through all the rows and columns
         else:
             # Move the rectangle
             if self.is_vertical():
@@ -102,114 +126,133 @@ class SelectionRectangle():
         self.send_epoch(row_epoch_queue, col_epoch_queue)
         
     def get_index(self):
-        if (self.is_vertical()):
+        """Return the current row or column index of the rectangle"""
+        if self.is_vertical():
             return int(self.x / self.width)
         else:
             return int(self.y / self.length)
 
     def send_epoch(self, row_epoch_queue, col_epoch_queue):
-        # Send a new epoch to the main process
+        """Send a new epoch to the main process"""
         if self.is_vertical():
-            #print("Current Col: %d" %(int(self.x / self.width)))
-            index = int(self.x / self.width)
+            index = self.get_index()
             epoch = EEGEpoch(False, index, pylsl.local_clock())
             col_epoch_queue.put_nowait(epoch)
         else:
-            #print("Current Row %d" %(int(self.y / self.length)))
-            index = int(self.y / self.length)
+            index = self.get_index()
             epoch = EEGEpoch(True, index, pylsl.local_clock())
             row_epoch_queue.put_nowait(epoch)
     
-    def makeInvisible(self, canvas):
-        canvas.delete(self.graphic_ref)
-
     def draw(self, canvas):
         """Draws the rectange to a Tkinter canvas"""
-        # Dispose of old drawn rectangle
-        canvas.delete(self.graphic_ref)
-        # Draw new rectangle and save reference
-        self.graphic_ref = canvas.create_rectangle(self.x,
-                                                  self.y,
-                                                  self.x + self.width,
-                                                  self.y + self.length,
-                                                  fill=self.color)
+        if self.visible:
+            # Dispose of old drawn rectangle
+            if self.graphic_ref != None:
+                canvas.delete(self.graphic_ref)
+            # Draw new rectangle and save reference
+            self.graphic_ref = canvas.create_rectangle(self.x,
+                                                        self.y,
+                                                        self.x + self.width,
+                                                        self.y + self.length,
+                                                        fill=self.color)
 
 
 class StartScreen(tk.Frame):
-    """This class just serves as the starting screen for the application"""
-    def __init__(self, master):
+    """Starting screen for the application"""
+    def __init__(self, master, next_screen):
         tk.Frame.__init__(self, master)
-
+        # Add title text
         self.title_text = tk.Label(self, text="P300 Speller (WIP)", font=("Arial", 24))
         self.title_text.grid(row=0,)
-
+        # Add start button
         self.start_button = tk.Button(self, command=self.start_speller, text='Start', font=("Arial", 24, "bold"), height=4, width=24)
         self.start_button.grid(row=2,pady=3, sticky=tk.W+tk.E)
-
+        # Screen that comes after this screen
+        self.next_screen = next_screen
+    
+    def display_screen(self):
+        """Adds this screen to the window"""
         self.grid(padx=30,pady=30)
+    
+    def remove_screen(self):
+        """Removes this screen from the window"""
+        self.grid_remove()
 
     def start_speller(self):
         """Removes this frame and displays the grid of characters"""
-        self.master.create_widgets()
-        self.master.set_rectangle()
-        self.master.draw()
-        self.master.update()
-        self.grid_remove()
+        self.next_screen.display_screen()
+        self.next_screen.update()
+        self.remove_screen()
         
-
     
 class P300GUI(tk.Frame):
-
-    def __init__(self, master, row_epoch_queue, col_epoch_queue, highlight_time=.100, intermediate_time=80):
+    """The main screen of the application that displays the character grid and spelling buffer"""
+    def __init__(self, master, row_epoch_queue, col_epoch_queue,
+        highlight_time=config.HIGHLIGHT_TIME, intermediate_time=config.INTERMEDIATE_TIME):
         tk.Frame.__init__(self, master)
-        self.row_epoch_queue = row_epoch_queue
-        self.col_epoch_queue = col_epoch_queue
-        self.highlight_time = highlight_time
-        self.intermediate_time = intermediate_time
-        self.rect_visible = True
+        self.row_epoch_queue = row_epoch_queue      # Reference to the queue of row epochs shared with main process
+        self.col_epoch_queue = col_epoch_queue      # Reference to the queue of col epochs shared with main process
+        self.selection_rect = self.make_rectangle()      # Selection rectangle used in the GUI
+        self.highlight_time = highlight_time        # How long the highlight rectangle will be present
+        self.intermediate_time = intermediate_time  # Length of time between presentations of the highlight rectangle
+        self.canvas = tk.Canvas(self)               # Reference to the cavas where the characters and rect are drawn
+        self.create_widgets()                       # Populate the screen
         self.master["bg"] = '#001c33'
         self["bg"] = '#001c33'
-        self.selection_rect = None
-        self.canvas = tk.Canvas(self)
-        self.canvas["width"] = 500
-        self.display_start_screen()
+        
+    def display_screen(self):
+        """Adds this screen to the window"""
         self.grid(padx=30,pady=30)
-
-    def display_start_screen(self):
-        start_screen = StartScreen(self)
+    
+    def remove_screen(self):
+        """Removes this screen from the window"""
+        self.grid_remove()
 
     def update(self):
         """Updates the position and visibility of the selection rectangle""" 
-        if (self.rect_visible):
-            # Make the rectangle invisible after it has been presented
-            self.selection_rect.makeInvisible(self.canvas)
+        if self.selection_rect.visible:
+            # Update the position of the rectangle
+            self.selection_rect.update(self.row_epoch_queue, self.col_epoch_queue)
+            # Rectangle is set to visible, draw the canvas
             self.draw()
-            self.rect_visible = not self.rect_visible
+            # Set it visibility for when this function is called again
+            self.selection_rect.visible = False
+            # Allow the rectangle to remain visible for a set time
             self.master.after(self.highlight_time, self.update)
         else:
-            # Make the rectangle visible for a given amount of time
-            self.selection_rect.update(self.row_epoch_queue, self.col_epoch_queue)
+            # Rectangle is set to invisible, update the canvas
             self.draw()
-            self.rect_visible = not self.rect_visible
-            self.master.after(self.intermediate_time, self.update)
+            # Set visibility to visible for next update call
+            self.selection_rect.visible = True
+            if self.selection_rect.end_of_sequence():
+                self.master.after(config.EPOCH_LENGTH * 1000 + self.intermediate_time, self.update)
+            else:
+                # Keep the rect invisible for a set amount of time
+                self.master.after(self.intermediate_time, self.update)
         
     def draw(self):
+        """Redraws the canvas"""
         self.canvas.delete("all")
-        if (self.rect_visible):
-            self.selection_rect.draw(self.canvas)
+        self.selection_rect.draw(self.canvas)
         self.draw_characters()
 
-    def set_rectangle(self, orientation="vertical"):
-        """Creates a new selection rectangle for this gui"""
-        col_width = int(self.canvas["width"]) / 6
-        self.selection_rect = SelectionRectangle(root=self.master,
-                                                x=0,
-                                                y=0,
-                                                width=col_width,
-                                                length=int(self.canvas["height"]),
-                                                color="#ffffff",
-                                                max_x=int(self.canvas["width"]),
-                                                max_y=int(self.canvas["height"]))
+    def make_rectangle(self, orientation="vertical"):
+        """Returns a new selection rectangle for this GUI"""
+        col_width = config.GRID_WIDTH / 6
+        if orientation == "vertical":
+            return SelectionRectangle(x=0, y=0,
+                                    width=col_width,
+                                    length=config.GRID_WIDTH,
+                                    color=config.RECT_COLOR,
+                                    max_x=config.GRID_WIDTH,
+                                    max_y=config.GRID_WIDTH)
+        else:
+            return SelectionRectangle(x=0, y=0,
+                                    width=config.GRID_WIDTH,
+                                    length=col_width,
+                                    color=config.RECT_COLOR,
+                                    max_x=config.GRID_WIDTH,
+                                    max_y=config.GRID_WIDTH)
 
     def draw_characters(self):
         """Draws 36 characters [a-z] and [0-9] in a 6x6 grid"""
@@ -221,8 +264,6 @@ class P300GUI(tk.Frame):
         ascii_number_offset = 48
         ascii_offset = ascii_letter_offset
         current_offset = 0
-
-        
 
         for row in range(6):
             for col in range(6):
@@ -243,10 +284,10 @@ class P300GUI(tk.Frame):
                 if (self.selection_rect != None):
                     if ((self.selection_rect.is_vertical() and col == self.selection_rect.get_index()
                         or not self.selection_rect.is_vertical() and row == self.selection_rect.get_index())
-                        and self.rect_visible):
-                        self.canvas.itemconfig(canvas_id, text=cell_char, fill="#000000")
+                        and self.selection_rect.visible):
+                        self.canvas.itemconfig(canvas_id, text=cell_char, fill=config.HIGHLIGHT_CHAR_COLOR)
                     else:
-                        self.canvas.itemconfig(canvas_id, text=cell_char, fill="#ffffff")
+                        self.canvas.itemconfig(canvas_id, text=cell_char, fill=config.DEFAULT_CHAR_COLOR)
 
     def create_widgets(self):
         """Populates the gui with all the necessary components"""
@@ -257,10 +298,10 @@ class P300GUI(tk.Frame):
         self.text_buffer["bg"] = '#000000'
         self.text_buffer["pady"] = 30
         # Canvas for drawing the grid of characters and the rectangle
-        self.canvas.grid(row=2, sticky=tk.W+tk.E)
+        self.canvas["width"] = config.GRID_WIDTH
         self.canvas["height"] = self.canvas["width"]
-        self.canvas["bg"] = '#000000'
-        self.draw_characters()
+        self.canvas["bg"] = config.GRID_BG_COLOR
+        self.canvas.grid(row=2, sticky=tk.W+tk.E)
         # Frame to hold all buttons at the bttom of the gui
         self.bottom_button_pane = tk.Frame(self)
         self.bottom_button_pane.grid(pady=10)

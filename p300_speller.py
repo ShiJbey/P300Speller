@@ -8,30 +8,26 @@ times when the gui has been updated
 """
 # Standard Library
 import os
-import sys
-import time
-import Tkinter as tk
+import argparse
+import pickle
 from multiprocessing import Process, Manager, Queue
 import datetime
+import Tkinter as tk
 # External library code
 from pylsl import StreamInlet, resolve_stream
+import numpy as np
 # Custom modules
+import butterwoth_bandpass
 import speller_gui as gui
 import config
-
-# Dictionary of data samples collected (time_stamp -> channel_data)
-DATA_HISTORY = {}
 
 class EEGEpoch(object):
     """Manages segments of EEG epoch data"""
     def __init__(self, is_row, index, start_time):
-        self.is_row = is_row
-        self.index = index
-        self.start_time = start_time
-        # 2D array of samples and channel data
-        self.sample_data = []
-        # Are we collecting data for this Epoch
-        self.active = True
+        self.is_row = is_row            # Boolean indicating if this epoch is for a row or column
+        self.index = index              # Row/Col index of this epoch
+        self.start_time = start_time    # Starting time of this epoch
+        self.sample_data = []           # 2D array of samples of channel data
 
     def is_within_epoch(self, sample_time):
         """Returns true if the given time is within this given epoch"""
@@ -75,10 +71,9 @@ def get_epoch_data(start_time, data_hist):
     closest_time = -1
     for read_time in sorted(data_hist.keys()):
         if read_time <= start_time:
+            # Overwite until we get a time closes to the start_time
             closest_time = read_time
         elif read_time > start_time:
-            if closest_time == -1:
-                closest_time = read_time
             break
 
     # Return empty list
@@ -96,9 +91,9 @@ def get_epoch_data(start_time, data_hist):
         data.append(data_hist[time])
     return data
 
-def update_data_history(time_stamp, sample):
+def update_data_history(history, time_stamp, sample):
     """Adds the sample channel data to the dict under its read time"""
-    DATA_HISTORY[time_stamp] = sample
+    history[time_stamp] = sample
     
 def run_gui(row_epoch_queue, col_epoch_queue):
     """Starts the p300 speller gui"""
@@ -106,26 +101,55 @@ def run_gui(row_epoch_queue, col_epoch_queue):
     root.title("P300 Speller")
     #root.geometry('%sx%s'%(config.WINDOW_WIDTH, config.WINDOW_HEIGHT))
     root.protocol("WM_DELETE_WINDOW", root.quit)
-    gui.P300GUI(root,
-        row_epoch_queue,
-        col_epoch_queue,
-        highlight_time=config.HIGHLIGHT_TIME,
-        intermediate_time=config.INTERMEDIATE_TIME)
+    speller_gui = gui.P300GUI(root,
+                            row_epoch_queue,
+                            col_epoch_queue)
+    start_screen = gui.StartScreen(root, speller_gui)
+    start_screen.display_screen()
     root.mainloop()
 
 
+
 if __name__ == '__main__':
-    # Change default port if a new one was given
-    if (len(sys.argv) == 2):
-        config.PORT =  str(sys.argv[1])
+    #==========================================================#
+    #             Collect command line arguments               #
+    #==========================================================#
+
+    def str2bool(val):
+        """Converts a string value to a boolean value."""
+        if val.lower() in ('yes', 'true', 't', 'y', '1', ''):
+            return True
+        elif val.lower() in ('no', 'false', 'f', 'n', '0'):
+            return False
+        else:
+            raise argparse.ArgumentTypeError('Boolean value expected')
+
+    
+    parser = argparse.ArgumentParser(description='Runs the P300 application')
+    parser.add_argument('--mode',
+                        dest='mode',
+                        type=str,
+                        metavar='mode',
+                        default='live',
+                        help='Runs the gui in training mode and '
+                        'creates a new classifiers with the data')
+    parser.add_argument('--gui_only',
+                        metavar='gui_only',
+                        type=str2bool,
+                        default=False,
+                        help='Only runs the gui in the live mode '
+                        'without connecting to LSL data stream')
+    args = parser.parse_args()
+
+    #==========================================================#
+    #          Set-up Queues for Managing Epochs               #
+    #==========================================================#
 
     # Data that has been collected from the EEG
     manager = Manager()
-
     # Epochs that have been created by the GUI
     row_epoch_queue = Queue()
     col_epoch_queue = Queue()
-
     # Dictionary for row epochs
     row_data = {}
     row_data[0] = {"active":[], "past":[]}
@@ -134,7 +158,6 @@ if __name__ == '__main__':
     row_data[3] = {"active":[], "past":[]}
     row_data[4] = {"active":[], "past":[]}
     row_data[5] = {"active":[], "past":[]}
-
     # Dictionary for column epochs
     col_data = {}
     col_data[0] = {"active":[], "past":[]}
@@ -143,87 +166,161 @@ if __name__ == '__main__':
     col_data[3] = {"active":[], "past":[]}
     col_data[4] = {"active":[], "past":[]}
     col_data[5] = {"active":[], "past":[]}
-    
 
+    # Dictionary of data samples collected in this sequence (time_stamp -> channel_data)
+    data_history = {}
+    
     # Create processes for the GUI and the EEG collection
     gui_process = Process(target=run_gui, args=(row_epoch_queue, col_epoch_queue))
-
-    # Look for the stream of EEG data on the network
-    print "Looking for EEG stream..."
-    streams = resolve_stream('type', 'EEG')
-    print "Stream found!"
-    
-    # Create inlet to read from stream
-    inlet = StreamInlet(streams[0])
-    
     # Start the GUI process
     gui_process.start()
 
-    num_iters =  0;
-
+    if not args.gui_only:
+        # Look for the stream of EEG data on the network
+        print "Looking for EEG stream..."
+        streams = resolve_stream('type', 'EEG')
+        print "Stream found!"
+        # Create inlet to read from stream
+        inlet = StreamInlet(streams[0])
     
-    # Read from the queues
-    while(gui_process.is_alive()):
+    #==========================================================#
+    #             DATA COLLECTION AND MANIPULATION             #
+    #==========================================================#
+
+    trials_complete = 0
+    sequences_complete = 0
+    row_epochs_read = 0
+    col_epochs_read = 0
+
+    # Run data collection for as long as the gui is active
+    while gui_process.is_alive():
         # reference to the most recent epoch
         epoch = None
-        # Get sample and time_stamp from data stream
-        sample, time_stamp = inlet.pull_sample(timeout=0.0)
-        # Store the sample locally
-        if sample != None:
-            update_data_history(time_stamp, sample)
+
+        if not args.gui_only:
+            # Get sample and time_stamp from data stream
+            sample, time_stamp = inlet.pull_sample(timeout=0.0)
+            # Store the sample locally
+            if sample != None:
+                update_data_history(data_history, time_stamp, sample)
         
+        # Try reading from both queues and updating the data dictionaries
         try:
-            epoch = row_epoch_queue.get_nowait()
-            if (epoch):
-                row_data[epoch.index]["active"].append(epoch)
-        
-            epoch = col_epoch_queue.get_nowait()
-            if (epoch):
-                col_data[epoch.index]["active"].append(epoch)
-                if (epoch.index == 5):
-                    num_iters += 1
+            if row_epochs_read < 6:
+                epoch = row_epoch_queue.get_nowait()
+                if epoch:
+                    row_data[epoch.index]["active"].append(epoch)
+                    row_epochs_read += 1
+            if col_epochs_read < 6:
+                epoch = col_epoch_queue.get_nowait()
+                if epoch:
+                    col_data[epoch.index]["active"].append(epoch)
+                    col_epochs_read += 1
         except:
             # Catch any exception that is thrown as a result of trying
             # to read from an empty queue
             pass
+        
+        # Sequence complete
+        if col_epochs_read == 6 and row_epochs_read == 6:
+            sequences_complete += 1
+            col_epochs_read = 0
+            row_epochs_read = 0
 
-        if (num_iters >= config.ITERS_BETWEEN_ANALYSIS):
-            print("Filling Epochs")
 
-            # Read from the LSL inlet until the time_stamp is >= the end
-            # time of the last epoch
-            while time_stamp != None and time_stamp <= epoch.start_time + config.EPOCH_LENGTH:
-                print "Getting remaining data from queue..."
-                sample, time_stamp = inlet.pull_sample(timeout=0.1)
-                update_data_history(time_stamp, sample)
-            
-            # Get data for all epochs
+        # Trial complete
+        if sequences_complete >= config.SEQ_PER_TRIAL:
+
+            # Get remaining data pertaining to last epoch
+            if not args.gui_only:
+                while time_stamp != None and time_stamp <= epoch.start_time + config.EPOCH_LENGTH:
+                    print "Getting remaining data from queue..."
+                    sample, time_stamp = inlet.pull_sample(timeout=0.1)
+                    update_data_history(time_stamp, sample)
+
+            # Run bandpass filter on the data
+            # Move all data to an anp arry
+    
+            print "Splitting into epochs."
+            # Fill and move epochs
             for row in row_data.keys():
                 for ep in row_data[row]["active"]:
-                    ep.sample_data = get_epoch_data(ep.start_time, DATA_HISTORY)
+                    ep.sample_data = get_epoch_data(ep.start_time, data_history)
                     row_data[row]["past"].append(ep)
                     row_data[row]["active"].remove(ep)
-            
             for col in col_data.keys():
                 for ep in col_data[col]["active"]:
-                    ep.sample_data = get_epoch_data(ep.start_time, DATA_HISTORY)
+                    ep.sample_data = get_epoch_data(ep.start_time, data_history)
                     col_data[col]["past"].append(ep)
                     col_data[col]["active"].remove(ep)
+            print "Done splitting."
 
-            print "Epochs Filled"
+            # Clear all data up to the start_time of last epoch
+            for key in sorted(data_history.keys()):
+                if key <= epoch.start_time:
+                    del data_history[key]
+
+            # Average data from the epochs
+            row_averages = {}
+            row_averages[0] = np.zeros((samples_per_epoch,config.NUM_CHANNELS))
+            row_averages[1] = np.zeros((samples_per_epoch,config.NUM_CHANNELS))
+            row_averages[2] = np.zeros((samples_per_epoch,config.NUM_CHANNELS))
+            row_averages[3] = np.zeros((samples_per_epoch,config.NUM_CHANNELS))
+            row_averages[4] = np.zeros((samples_per_epoch,config.NUM_CHANNELS))
+            row_averages[5] = np.zeros((samples_per_epoch,config.NUM_CHANNELS))
+            col_averages = {}
+            col_averages[0] = np.zeros((samples_per_epoch,config.NUM_CHANNELS))
+            col_averages[1] = np.zeros((samples_per_epoch,config.NUM_CHANNELS))
+            col_averages[2] = np.zeros((samples_per_epoch,config.NUM_CHANNELS))
+            col_averages[3] = np.zeros((samples_per_epoch,config.NUM_CHANNELS))
+            col_averages[4] = np.zeros((samples_per_epoch,config.NUM_CHANNELS))
+            col_averages[5] = np.zeros((samples_per_epoch,config.NUM_CHANNELS))
+
+            # Average the rows
+            for row in row_data.keys():
+                # Sum the channel values
+                for ep in row_data[row]["past"]:
+                    data = np.array(ep.sample_data);
+                    for sample_num in range(len(data)):
+                        row_averages[row][sample_num,0:config.NUM_CHANNELS - 1] =
+                            row_averages[row][sample_num,0:config.NUM_CHANNELS - 1] +
+                            data[sample_num,0:config.NUM_CHANNELS - 1]
+                # Divide by the # of epochs for the row
+                row_averages[row] = row_averages[row] / len(row_data[row]["past"])
+
+            # Average the columns
+            for col in c0l_data.keys():
+                # Sum the channel values
+                for ep in col_data[col]["past"]:
+                    data = np.array(ep.sample_data);
+                    for sample_num in range(len(data)):
+                        col_averages[col][sample_num,0:config.NUM_CHANNELS - 1] =
+                            col_averages[col][sample_num,0:config.NUM_CHANNELS - 1] +
+                            data[sample_num,0:config.NUM_CHANNELS - 1]
+                # Divide by the # of epochs for the column
+                col_averages[col] = col_averages[col] / len(col_data[col]["past"])
+
+
+            if args.mode = 'train':
+
+            else:
+                pass
+            
+            
+            
+           
+
+            
             # Clear out all the data samples that occurred before the start
             # of the last epoch
-            for key in sorted(DATA_HISTORY.keys()):
-                #print "Clearing out sample: " + str(repr(key))
-                if key <= epoch.start_time:
-                    del DATA_HISTORY[key]
+            
             
             
             # Reset counter
-            num_iters = 0
+            sequences_complete = 0
 
     # Output the the epics to CSV files
-    if (config.OUTPUT_CSV):
+    if config.OUTPUT_CSV:
         
 
         dir_path = os.path.dirname(os.path.realpath(__file__))

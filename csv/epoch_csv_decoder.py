@@ -14,22 +14,9 @@ from scipy import signal
 import config
 
 
-"""
-def butter_lowpass(cutoff, fs, order=5):
-    nyq = 0.5 * fs
-    normal_cutoff = cutoff / nyq
-    b, a = butter(order, normal_cutoff, btype='low', analog=False)
-    return b, a
-
-def butter_lowpass_filter(data, cutoff, fs, order=5):
-    b, a = butter_lowpass(cutoff, fs, order=order)
-    y = lfilter(b, a, data)
-    return y
-"""
-
 samples_per_epoch = config.EPOCH_LENGTH * config.SAMPLING_RATE
 
-def get_sample_data(filename,delim=","):
+def get_sample_data(filename, delim=","):
     """Returns a 2D-numpy array of the sample data from a given file"""
     data = []
     # Read in data from the csv file
@@ -39,7 +26,7 @@ def get_sample_data(filename,delim=","):
             if len(row) > 1:
                 for i in range(len(row)):
                     row[i] = float(row[i])
-                data.append(row)
+                data.append(row[1:])
 
     # Convert the 2D array to a numpy array
     a = np.array(data)

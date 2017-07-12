@@ -4,4 +4,6 @@
 __pycache__
 p300SpellerLog.txt
 ./OpenBCI_Python/bluepy/
-csv/
+csv/*/
+.vscode/
+*.mat
