@@ -20,23 +20,25 @@ class SelectionRectangle():
         self.remaining_cols = range(6)  # List of possible columns for the rect to move to
         self.visible = True         # Is the rectangle currently made visible on the screen 
 
-    def move_to_col(self, index):
+    def move_to_col(self, index, reset_top=True):
         """Moves and re-orients the rectangle to a column specified by an index"""
         # Reorient the rectangle to be vertical
         if not self.is_vertical():
             self.rotate90()
         # Set the rectangle to the proper position    
         self.x = index * self.width
-        self.y = 0
+        if reset_top:
+            self.y = 0
 
-    def move_to_row(self, index):
+    def move_to_row(self, index, reset_left=True):
         """Moves and re-orients the rectangle to a row specified by an index"""
         # Reorient the rectangle to be horizontal 
         if self.is_vertical():
             self.rotate90()
         # Set the rectangel to the proper position
         self.y = index * self.length
-        self.x = 0
+        if reset_left:
+            self.x = 0
             
     def rotate90(self):
         """Rotates the rectangle 90 degrees"""
@@ -77,7 +79,7 @@ class SelectionRectangle():
         """Returns true if there are no more available moves for the rect"""
         return len(self.remaining_cols) == 0 and len(self.remaining_rows) == 0
 
-    def update(self, row_epoch_queue, col_epoch_queue):
+    def update(self):
         """Moves the recangle by one row or column and creates epoch"""
         # Move the rectangle by randomly selecting a row or column
         if config.RANDOM_HIGHLIGHT:
@@ -122,8 +124,6 @@ class SelectionRectangle():
                     self.y = 0
                     self.rotate90()
                     
-        # Create a new epoch for this update
-        self.send_epoch(row_epoch_queue, col_epoch_queue)
         
     def get_index(self):
         """Return the current row or column index of the rectangle"""
@@ -131,17 +131,6 @@ class SelectionRectangle():
             return int(self.x / self.width)
         else:
             return int(self.y / self.length)
-
-    def send_epoch(self, row_epoch_queue, col_epoch_queue):
-        """Send a new epoch to the main process"""
-        if self.is_vertical():
-            index = self.get_index()
-            epoch = EEGEpoch(False, index, pylsl.local_clock())
-            col_epoch_queue.put_nowait(epoch)
-        else:
-            index = self.get_index()
-            epoch = EEGEpoch(True, index, pylsl.local_clock())
-            row_epoch_queue.put_nowait(epoch)
     
     def draw(self, canvas):
         """Draws the rectange to a Tkinter canvas"""
@@ -187,18 +176,37 @@ class StartScreen(tk.Frame):
     
 class P300GUI(tk.Frame):
     """The main screen of the application that displays the character grid and spelling buffer"""
-    def __init__(self, master, row_epoch_queue, col_epoch_queue,
+    def __init__(self, master, row_epoch_queue, col_epoch_queue, character_pipe, is_training,
         highlight_time=config.HIGHLIGHT_TIME, intermediate_time=config.INTERMEDIATE_TIME):
         tk.Frame.__init__(self, master)
         self.row_epoch_queue = row_epoch_queue      # Reference to the queue of row epochs shared with main process
         self.col_epoch_queue = col_epoch_queue      # Reference to the queue of col epochs shared with main process
+        self.is_training = is_training              # Boolean value indicating if we are in training mode
         self.selection_rect = self.make_rectangle()      # Selection rectangle used in the GUI
         self.highlight_time = highlight_time        # How long the highlight rectangle will be present
         self.intermediate_time = intermediate_time  # Length of time between presentations of the highlight rectangle
         self.canvas = tk.Canvas(self)               # Reference to the cavas where the characters and rect are drawn
-        self.create_widgets()                       # Populate the screen
-        self.master["bg"] = '#001c33'
-        self["bg"] = '#001c33'
+        
+        self.spelled_text = tk.StringVar()             # String var used to manage the word(s) being spelled
+        self.spelled_text.set("")
+        self.character_pipe = character_pipe;                  
+        if self.is_training:
+            self.trial_row = -1
+            self.trial_col = -1
+            self.trial_count = 0
+            self.sequence_count = 0
+            self.trial_in_progress = False
+            self.epochs_made = 0
+            self.char_highlighted = False            
+            col_width = config.GRID_WIDTH / 6
+            self.char_select_rect = SelectionRectangle(x=col_width * self.trial_col, y=col_width * self.trial_row,
+                                    width=col_width,
+                                    length=col_width,
+                                    color=config.CHAR_SELECT_COLOR,
+                                    max_x=config.GRID_WIDTH,
+                                    max_y=config.GRID_WIDTH) 
+        self.create_widgets()                       # Populate the screen  
+        
         
     def display_screen(self):
         """Adds this screen to the window"""
@@ -209,10 +217,94 @@ class P300GUI(tk.Frame):
         self.grid_remove()
 
     def update(self):
+        """Updates the gui based on the mode the application is in"""
+        if self.is_training:
+            self.training_update()
+        else:
+            self.live_update()
+    
+    def training_update(self):
+        """Updates the gui while in training mode"""
+        # Manages the current state of the training
+
+        
+        # Highlight the character when we are currently not in the middle of a trial
+        if not self.trial_in_progress and self.epochs_made == 0:
+            # Get row and column of character to be highlighted for training
+            if self.trial_col == -1 and self.trial_row == -1:
+                msg = self.character_pipe.recv()
+                if msg[0] == 'train':
+                    self.trial_row = msg[2]
+                msg = self.character_pipe.recv()
+                if msg[0] == 'train':
+                    self.trial_col = msg[2]
+
+            # Move the char highlight rect behind the character
+            self.char_select_rect.move_to_col(self.trial_col, reset_top=False)
+            self.char_select_rect.move_to_row(self.trial_row, reset_left=False)
+
+            # highlight the character
+            self.char_highlighted = True
+            self.trial_in_progress = True
+            self.draw()
+            print "Displaying training character"
+            # Wait 2 seconds (2000 milliseconds)
+            self.master.after(3000, self.update)
+
+        elif self.trial_in_progress:
+            
+            # Turn off the highlighting of the character
+            if self.char_highlighted:
+                self.char_highlighted = False
+                self.draw()
+                self.trial_row = -1
+                self.trial_col = -1
+                print "Removed character highlight"
+                print "Starting Trial # %d" % self.trial_count
+
+            # Proceed updating like normal
+            if self.selection_rect.visible:
+                # Update the position of the rectangle
+                self.selection_rect.update()
+                self.send_epoch()
+                # Rectangle is set to visible, draw the canvas
+                self.draw()
+                # Set it visibility for when this function is called again
+                self.selection_rect.visible = False
+                # Allow the rectangle to remain visible for a set time
+                self.master.after(self.highlight_time, self.update)
+            else:
+                # Rectangle is set to invisible, update the canvas
+                self.draw()
+                # Set visibility to visible for next update call
+                self.selection_rect.visible = True
+
+                if self.selection_rect.end_of_sequence():
+                    print "Ending Sequence"
+                    self.sequence_count += 1
+                    if self.sequence_count >= config.SEQ_PER_TRIAL:
+                        self.trial_count += 1
+                        self.sequence_count = 0
+                        self.trial_in_progress = False
+                        if self.trial_count >= config.NUM_TRIALS:
+                            print "GUI exiting"
+                            time.sleep(1)
+                            self.master.quit()
+                        else:
+                            self.master.after(config.EPOCH_LENGTH * 1000 + self.intermediate_time, self.update)
+                    else:
+                        self.master.after(config.EPOCH_LENGTH * 1000 + self.intermediate_time, self.update)
+                else:
+                    # Keep the rect invisible for a set amount of time
+                    self.master.after(self.intermediate_time, self.update)
+        
+
+    def live_update(self):
         """Updates the position and visibility of the selection rectangle""" 
         if self.selection_rect.visible:
             # Update the position of the rectangle
-            self.selection_rect.update(self.row_epoch_queue, self.col_epoch_queue)
+            self.selection_rect.update()
+            self.send_epoch()
             # Rectangle is set to visible, draw the canvas
             self.draw()
             # Set it visibility for when this function is called again
@@ -233,8 +325,24 @@ class P300GUI(tk.Frame):
     def draw(self):
         """Redraws the canvas"""
         self.canvas.delete("all")
-        self.selection_rect.draw(self.canvas)
+        if self.char_highlighted:
+            self.selection_rect.x = -10000
+            self.selection_rect.x = -10000
+            self.char_select_rect.draw(self.canvas)
+        else:
+            self.selection_rect.draw(self.canvas)
         self.draw_characters()
+
+    def send_epoch(self):
+        """Send a new epoch to the main process"""
+        if self.selection_rect.is_vertical():
+            index = self.selection_rect.get_index()
+            epoch = EEGEpoch(False, index, pylsl.local_clock())
+            self.col_epoch_queue.put_nowait(epoch)
+        else:
+            index = self.selection_rect.get_index()
+            epoch = EEGEpoch(True, index, pylsl.local_clock())
+            self.row_epoch_queue.put_nowait(epoch)        
 
     def make_rectangle(self, orientation="vertical"):
         """Returns a new selection rectangle for this GUI"""
@@ -291,12 +399,13 @@ class P300GUI(tk.Frame):
 
     def create_widgets(self):
         """Populates the gui with all the necessary components"""
+        self.master["bg"] = '#001c33'
+        self["bg"] = '#001c33'
         # Displays the current text being typed
-        self.text_buffer = tk.Label(self, text="")
+        self.text_buffer = tk.Entry(self, font=("Arial", 24, "bold"), textvariable=self.spelled_text)
         self.text_buffer.grid(row=0, sticky=tk.W+tk.E)
         self.text_buffer["fg"] = '#ffffff'
         self.text_buffer["bg"] = '#000000'
-        self.text_buffer["pady"] = 30
         # Canvas for drawing the grid of characters and the rectangle
         self.canvas["width"] = config.GRID_WIDTH
         self.canvas["height"] = self.canvas["width"]
@@ -306,11 +415,11 @@ class P300GUI(tk.Frame):
         self.bottom_button_pane = tk.Frame(self)
         self.bottom_button_pane.grid(pady=10)
         # Button to delete the previous character
-        #self.back_space_button = tk.Button(self.bottom_button_pane, text='delete', height=1, width=6)
-        #self.back_space_button.grid(row=0,column=0)
+        self.back_space_button = tk.Button(self.bottom_button_pane, text='delete', height=1, width=6)
+        self.back_space_button.grid(row=0,column=0)
         # Button for adding a space character to the text_buffer
-        #self.space_button = tk.Button(self.bottom_button_pane, text='space', height=1, width=12)
-        #self.space_button.grid(row=0,column=1)
+        self.space_button = tk.Button(self.bottom_button_pane, text='space', height=1, width=12)
+        self.space_button.grid(row=0,column=1)
         # Button for exiting the application
         self.exit_button = tk.Button(self.bottom_button_pane, text='exit', command=self.master.quit, height=1, width=6)
         self.exit_button.grid(row=0,column=3)
