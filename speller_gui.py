@@ -186,25 +186,26 @@ class P300GUI(tk.Frame):
         self.highlight_time = highlight_time        # How long the highlight rectangle will be present
         self.intermediate_time = intermediate_time  # Length of time between presentations of the highlight rectangle
         self.canvas = tk.Canvas(self)               # Reference to the cavas where the characters and rect are drawn
-        
         self.spelled_text = tk.StringVar()             # String var used to manage the word(s) being spelled
         self.spelled_text.set("")
-        self.character_pipe = character_pipe;                  
-        if self.is_training:
-            self.trial_row = -1
-            self.trial_col = -1
-            self.trial_count = 0
-            self.sequence_count = 0
-            self.trial_in_progress = False
-            self.epochs_made = 0
-            self.char_highlighted = False            
-            col_width = config.GRID_WIDTH / 6
-            self.char_select_rect = SelectionRectangle(x=col_width * self.trial_col, y=col_width * self.trial_row,
-                                    width=col_width,
-                                    length=col_width,
-                                    color=config.CHAR_SELECT_COLOR,
-                                    max_x=config.GRID_WIDTH,
-                                    max_y=config.GRID_WIDTH) 
+        self.text_buffer = tk.Entry(self, font=("Arial", 24, "bold"), cursor="arrow", insertbackground="#ffffff", textvariable=self.spelled_text)
+        self.character_pipe = character_pipe;   
+        self.predicted_row = -1
+        self.predicted_col = -1               
+        self.trial_row = -1
+        self.trial_col = -1
+        self.trial_count = 0
+        self.sequence_count = 0
+        self.trial_in_progress = False
+        self.epochs_made = 0
+        self.char_highlighted = False            
+        col_width = config.GRID_WIDTH / 6
+        self.char_select_rect = SelectionRectangle(x=col_width * self.trial_col, y=col_width * self.trial_row,
+                                width=col_width,
+                                length=col_width,
+                                color=config.CHAR_SELECT_COLOR,
+                                max_x=config.GRID_WIDTH,
+                                max_y=config.GRID_WIDTH) 
         self.create_widgets()                       # Populate the screen  
         
         
@@ -317,10 +318,32 @@ class P300GUI(tk.Frame):
             # Set visibility to visible for next update call
             self.selection_rect.visible = True
             if self.selection_rect.end_of_sequence():
+                print "Ending Sequence"
+                self.sequence_count += 1
+                if self.sequence_count >= config.SEQ_PER_TRIAL:
+                    self.sequence_count = 0
+                    # Read from pipes for prediction
+                    msg = self.character_pipe.recv()
+                    if msg[0] == 'prediction':
+                        self.predicted_row = msg[2]
+                    msg = self.character_pipe.recv()
+                    if msg[0] == 'prediction':
+                        self.predicted_col = msg[2]
+                    print "Predicted Row: %d, Predicted Col: %d" % (self.predicted_row, self.predicted_col)
+                    predicted_char = self.get_character(self.predicted_row, self.predicted_col)
+                    self.add_char(predicted_char)
+                print "Starting sequence"
                 self.master.after(config.EPOCH_LENGTH * 1000 + self.intermediate_time, self.update)
             else:
                 # Keep the rect invisible for a set amount of time
                 self.master.after(self.intermediate_time, self.update)
+    
+    def get_character(self, row, col):
+        cell_num = (row * 6) + col
+        if cell_num <= 25:
+            return chr(65 + cell_num)
+        else:
+            return chr(10 + (cell_num - 25))
         
     def draw(self):
         """Redraws the canvas"""
@@ -385,8 +408,8 @@ class P300GUI(tk.Frame):
                 # Get the current cell character
                 cell_char = chr(ascii_offset + current_offset)
                 current_offset += 1
-                canvas_id = self.canvas.create_text((col_width * col) + (col_width / 2),
-                        (row_height * row) + (row_height / 4), font=("Arial", (col_width / 4),"bold"), anchor="nw")
+                canvas_id = self.canvas.create_text((col_width * col) + (col_width / 2.5),
+                        (row_height * row) + (row_height / 3), font=("Arial", (col_width / 4),"bold"), anchor="nw")
                 
                 # Determine if this character is printed white or black
                 if (self.selection_rect != None):
@@ -397,12 +420,25 @@ class P300GUI(tk.Frame):
                     else:
                         self.canvas.itemconfig(canvas_id, text=cell_char, fill=config.DEFAULT_CHAR_COLOR)
 
+    def add_space(self):
+        self.spelled_text.set(self.spelled_text.get() + "_")
+        self.text_buffer.icursor(len(self.spelled_text.get()))
+
+    def delete_last(self):
+        if len(self.spelled_text.get()) > 0:
+            self.spelled_text.set(self.spelled_text.get()[:-1])
+            self.text_buffer.icursor(len(self.spelled_text.get()))
+    
+    def add_char(self, c):
+        self.spelled_text.set(self.spelled_text.get() + c)
+        self.text_buffer.icursor(len(self.spelled_text.get()))
+
     def create_widgets(self):
         """Populates the gui with all the necessary components"""
         self.master["bg"] = '#001c33'
         self["bg"] = '#001c33'
         # Displays the current text being typed
-        self.text_buffer = tk.Entry(self, font=("Arial", 24, "bold"), textvariable=self.spelled_text)
+        
         self.text_buffer.grid(row=0, sticky=tk.W+tk.E)
         self.text_buffer["fg"] = '#ffffff'
         self.text_buffer["bg"] = '#000000'
@@ -415,10 +451,10 @@ class P300GUI(tk.Frame):
         self.bottom_button_pane = tk.Frame(self)
         self.bottom_button_pane.grid(pady=10)
         # Button to delete the previous character
-        self.back_space_button = tk.Button(self.bottom_button_pane, text='delete', height=1, width=6)
+        self.back_space_button = tk.Button(self.bottom_button_pane, text='delete', command=self.delete_last, height=1, width=6)
         self.back_space_button.grid(row=0,column=0)
         # Button for adding a space character to the text_buffer
-        self.space_button = tk.Button(self.bottom_button_pane, text='space', height=1, width=12)
+        self.space_button = tk.Button(self.bottom_button_pane, text='space', command=self.add_space, height=1, width=12)
         self.space_button.grid(row=0,column=1)
         # Button for exiting the application
         self.exit_button = tk.Button(self.bottom_button_pane, text='exit', command=self.master.quit, height=1, width=6)

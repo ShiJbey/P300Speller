@@ -19,7 +19,8 @@ from pylsl import StreamInlet, resolve_stream
 import numpy as np
 from sklearn import svm
 # Custom modules
-import butterworth_bandpass
+from butterworth_bandpass import butter_bandpass_filter
+from plot_classifier import *
 import speller_gui as gui
 import config
 
@@ -108,6 +109,13 @@ def select_rand_element(x):
         rand_index = random.randint(0, len(x) - 1)
         elem = x[rand_index]
         return elem
+
+def get_desired_channels(sample, index_list):
+    new_sample = []
+    for i in range(len(sample)):
+        if i in index_list:
+            new_sample.append(sample[i])
+    return new_sample
     
 def run_gui(row_epoch_queue, col_epoch_queue, pipe_conn, is_training):
     """Starts the p300 speller gui"""
@@ -280,7 +288,7 @@ if __name__ == '__main__':
             sample, time_stamp = inlet.pull_sample(timeout=0.0)
             # Store the sample locally
             if sample != None:
-                update_data_history(data_history, time_stamp, sample)
+                update_data_history(data_history, time_stamp, get_desired_channels(sample, config.CHANNELS))
 
         #==========================================================#
         #            Read Epochs Created by the GUI                #
@@ -327,21 +335,20 @@ if __name__ == '__main__':
                 while time_stamp != None and time_stamp <= epoch.start_time + config.EPOCH_LENGTH:
                     print "Getting remaining data from queue..."
                     sample, time_stamp = inlet.pull_sample(timeout=0.1)
-                    # Extract only the data from the channels that we want
-                    sample_data = []
-                    for channel in range(len(config.CHANNELS)):
-                        sample_data.append(sample[channel])
-                    update_data_history(time_stamp, sample_data)
+                    update_data_history(data_history, time_stamp, get_desired_channels(sample, config.CHANNELS))
 
             #==========================================================#
             #                     Filtering Data                       #
             #==========================================================#
-
+            """
             # Move all data to an np array
             all_data = []
-            for sample in data_history:
-                all_data.append[sample]
+            for sample_time in data_history:
+                all_data.append(data_history[sample_time])
             all_data = np.array(all_data)
+
+            
+            print np.shape(all_data)
 
             # Replace each column with the filtered version
             if len(all_data) > 0:
@@ -355,8 +362,8 @@ if __name__ == '__main__':
 
             # Update the data history dictionary
             for i in range(len(all_data)):
-                data_hist.keys[i] = all_data[i,:].tolist()
-
+                data_history[sorted(data_history.keys())[i]] = all_data[i,:].tolist()
+            """
             #==========================================================#
             #               Splitting Data into Epochs                 #
             #==========================================================#
@@ -389,8 +396,8 @@ if __name__ == '__main__':
                 # Sum the channel values
                 for ep in row_data[row]["past"]:
                     data = np.array(ep.sample_data);
-                    for sample_num in range(len(data)):
-                        row_averages[row][sample_num,0:config.NUM_CHANNELS - 1] = row_averages[row][sample_num,0:config.NUM_CHANNELS - 1] + data[sample_num,0:config.NUM_CHANNELS - 1]
+                    for sample_num in range(len(data) - 1):
+                        row_averages[row][sample_num,0:len(config.CHANNELS) - 1] = row_averages[row][sample_num,0:len(config.CHANNELS) - 1] + data[sample_num,0:len(config.CHANNELS) - 1]
                 # Divide by the # of epochs for the row
                 row_averages[row] = row_averages[row] / len(row_data[row]["past"])
 
@@ -399,8 +406,8 @@ if __name__ == '__main__':
                 # Sum the channel values
                 for ep in col_data[col]["past"]:
                     data = np.array(ep.sample_data);
-                    for sample_num in range(len(data)):
-                        col_averages[col][sample_num,0:config.NUM_CHANNELS - 1] = col_averages[col][sample_num,0:config.NUM_CHANNELS - 1] + data[sample_num,0:config.NUM_CHANNELS - 1]
+                    for sample_num in range(len(data) - 1):
+                        col_averages[col][sample_num,0:len(config.CHANNELS) - 1] = col_averages[col][sample_num,0:len(config.CHANNELS) - 1] + data[sample_num,0:len(config.CHANNELS) - 1]
                 # Divide by the # of epochs for the column
                 col_averages[col] = col_averages[col] / len(col_data[col]["past"])
 
@@ -408,41 +415,48 @@ if __name__ == '__main__':
             #         Classification or Storage for Training           #
             #==========================================================#
             if args.mode == 'live':
+                # Tuples for deicsion making (index, # of positive p300s)
                 predicted_col = (-1, -1)
                 predicted_row = (-1, -1)
 
                 # pass row data from this past trial to the trained classifier
                 for row_index in range(len(row_averages)):
-                    prediction = classifier.predict(np.transpose(row_averages[row_index]))
+                    prediction = classifier.predict(np.transpose(row_averages[row_index])).tolist()
+                    print "Row#%d Prediction:" % row_index
+                    print prediction
                     false_count = prediction.count(0)
                     pos_count = prediction.count(1)
-                    if pos_count >= false_count and pos_count > predicted_row[1]:
+                    if  pos_count > predicted_row[1]:
                         predicted_row = (row_index, pos_count)
                 # pass col data from this past trial to the trained classifier
                 for col_index in range(len(col_averages)):
-                    prediction = classifier.predict(np.transpose(col_averages[col_index]))
+                    prediction = classifier.predict(np.transpose(col_averages[col_index])).tolist()
+                    print "Col#%d Prediction:" % col_index
+                    print prediction
                     false_count = prediction.count(0)
                     pos_count = prediction.count(1)
-                    if pos_count >= false_count and pos_count > predicted_col[1]:
+                    if pos_count > predicted_col[1]:
                         predicted_col = (col_index, pos_count)
 
-                main_conn.send(["prediction", "row", predicted_row])
-                main_conn.send(["prediction", "col", predicted_col])
+                main_conn.send(["prediction", "row", predicted_row[0]])
+                main_conn.send(["prediction", "col", predicted_col[0]])
 
             else:
                 # Add all row average data to the example lists
                 for row_index in range(len(row_averages)):
                     for channel_index in range(len(row_averages[row_index][0])):
-                        X.append(row_averages[row_index][:channel_index].tolist())
+                        X.append(row_averages[row_index][:,channel_index].tolist())
                         if row_index == p300_row:
+                            print "Positive row test case added"
                             y.append(1)
                         else:
                             y.append(0)
                 # Add all col average data to the example lists
                 for col_index in range(len(col_averages)):
                     for channel_index in range(len(col_averages[col_index][0])):
-                        X.append(col_averages[col_index][:channel_index].tolist())
+                        X.append(col_averages[col_index][:,channel_index].tolist())
                         if col_index == p300_col:
+                            print "Positive col test case added"
                             y.append(1)
                         else:
                             y.append(0)
@@ -471,8 +485,13 @@ if __name__ == '__main__':
     #==========================================================#
 
     if args.mode == 'train' and not args.gui_only: 
-        classifier = svm.SVC()
+        classifier = svm.SVC(kernel='linear')
         print "Training classifier."
+        X = np.array(X)
+        y = np.array(y)
+        #print np.shape(X)
+        #print np.shape(y)
+        #plot_classifier(X,y)
         classifier.fit(X,y)
         # Export the classifier
         print "Exporting classsifier."
