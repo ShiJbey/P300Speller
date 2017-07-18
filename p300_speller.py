@@ -35,7 +35,7 @@ class EEGEpoch(object):
         self.is_row = is_row            # Boolean indicating if this epoch is for a row or column
         self.index = index              # Row/Col index of this epoch
         self.start_time = start_time    # Starting time of this epoch
-        self.sample_data = []           # 2D array of samples of channel data
+        self.sample_data = None         # Numpy 2D array of sample data (sample X channel)
         self.is_p300 = is_p300          # Set to true if there is supposed to be P300 (used in training) 
 
     def is_within_epoch(self, sample_time):
@@ -71,10 +71,17 @@ class EEGEpoch(object):
                 out_file.write(csv_row)
 
 def get_epoch_data(start_time, data_hist):
-    """Loops through the data history and returns a 2D array of sample data"""
-    # 2D array that will hold channel data from samples
+    """Loops through the data history and returns a numpy array of sample data"""
+    # 2D array of sample data
     data = []
 
+    for sample in data_hist:
+        if sample[0] >= start_time and sample[0] < start_time + config.EPOCH_LENGTH:
+            data.append(sample)
+    
+    return np.array(data)
+
+    """
     # Loop through the list of keys until we find the sample
     #  closest to the start time
     closest_time = -1
@@ -98,11 +105,13 @@ def get_epoch_data(start_time, data_hist):
     # Append the sample data for all the samples
     for time in sample_times:
         data.append(data_hist[time])
-    return data
+    """
+
+    return data 
 
 def update_data_history(history, time_stamp, sample):
     """Adds the sample channel data to the dict under its read time"""
-    history[time_stamp] = sample
+    history = history
 
 def select_rand_element(x):
         """Selects element from list 'x' and returns it"""
@@ -193,8 +202,8 @@ if __name__ == '__main__':
     # Pipe to send a predicted character to the gui to update the spelling buffer
     main_conn, gui_conn = Pipe()
 
-    # Dictionary of data samples collected in this sequence (time_stamp -> channel_data)
-    data_history = {}
+    # Matrix of sample data [[read_time,c1,c2,...cn],...]
+    data_history = np.asmatrix(np.zeros((0,1 + len(config.CHANNELS))), dtype=np.float64)
 
     # List of dictionaries holding epoch objects
     row_data = range(6)
@@ -212,27 +221,27 @@ if __name__ == '__main__':
     col_data[4] = {"active":[], "past":[]}
     col_data[5] = {"active":[], "past":[]}
 
-    # List of numpy arrays holding sample data for a single trial
+    # List of numpy matrices. Each matrix hold the average of the sample data for each channel
     samples_per_epoch = config.EPOCH_LENGTH * config.SAMPLING_RATE
     row_averages = range(6)
-    row_averages[0] = np.zeros((samples_per_epoch,len(config.CHANNELS)))
-    row_averages[1] = np.zeros((samples_per_epoch,len(config.CHANNELS)))
-    row_averages[2] = np.zeros((samples_per_epoch,len(config.CHANNELS)))
-    row_averages[3] = np.zeros((samples_per_epoch,len(config.CHANNELS)))
-    row_averages[4] = np.zeros((samples_per_epoch,len(config.CHANNELS)))
-    row_averages[5] = np.zeros((samples_per_epoch,len(config.CHANNELS)))
+    row_averages[0] = np.zeros((samples_per_epoch,len(config.CHANNELS)), dtype=np.float64)
+    row_averages[1] = np.zeros((samples_per_epoch,len(config.CHANNELS)), dtype=np.float64)
+    row_averages[2] = np.zeros((samples_per_epoch,len(config.CHANNELS)), dtype=np.float64)
+    row_averages[3] = np.zeros((samples_per_epoch,len(config.CHANNELS)), dtype=np.float64)
+    row_averages[4] = np.zeros((samples_per_epoch,len(config.CHANNELS)), dtype=np.float64)
+    row_averages[5] = np.zeros((samples_per_epoch,len(config.CHANNELS)), dtype=np.float64)
     col_averages = range(6)
-    col_averages[0] = np.zeros((samples_per_epoch,len(config.CHANNELS)))
-    col_averages[1] = np.zeros((samples_per_epoch,len(config.CHANNELS)))
-    col_averages[2] = np.zeros((samples_per_epoch,len(config.CHANNELS)))
-    col_averages[3] = np.zeros((samples_per_epoch,len(config.CHANNELS)))
-    col_averages[4] = np.zeros((samples_per_epoch,len(config.CHANNELS)))
-    col_averages[5] = np.zeros((samples_per_epoch,len(config.CHANNELS)))
+    col_averages[0] = np.zeros((samples_per_epoch,len(config.CHANNELS)), dtype=np.float64)
+    col_averages[1] = np.zeros((samples_per_epoch,len(config.CHANNELS)), dtype=np.float64)
+    col_averages[2] = np.zeros((samples_per_epoch,len(config.CHANNELS)), dtype=np.float64)
+    col_averages[3] = np.zeros((samples_per_epoch,len(config.CHANNELS)), dtype=np.float64)
+    col_averages[4] = np.zeros((samples_per_epoch,len(config.CHANNELS)), dtype=np.float64)
+    col_averages[5] = np.zeros((samples_per_epoch,len(config.CHANNELS)), dtype=np.float64)
 
     # Holds all of the training examples
-    X = []
+    X = np.asmatrix(np.zeros((0,len(config.CHANNELS))), dtype=np.float64)
     # Holds all of the example classifications
-    y = []
+    y = np.array([])
     
     #==========================================================#
     #                    Spawn GUI Process                     #
@@ -267,6 +276,9 @@ if __name__ == '__main__':
     col_options = range(6)     # List of column indices for selecting random characters
     p300_row = -1              # Row that has been randomly selected for training
     p300_col = -1              # Column that has been randomly selected for training
+    epoch = None               # Reference to the most recent epoch
+    first_epoch = None         # Reference to the first epoch created in the current trial
+    last_epoch = None          # Reference to the last epoch created in the current trial
 
     if args.mode == 'train':
         # Select a random row and column for training this trial
@@ -278,6 +290,34 @@ if __name__ == '__main__':
 
     # Run data collection for as long as the gui is active
     while gui_process.is_alive():
+        
+        #==========================================================#
+        #            Read Epochs Created by the GUI                #
+        #==========================================================#
+
+        # Try reading from both queues and updating the data dictionaries
+        try:
+            if row_epochs_read < 6:
+                epoch = row_epoch_queue.get_nowait()
+                if epoch:
+                    row_data[epoch.index]["active"].append(epoch)
+                    row_epochs_read += 1
+                    if first_epoch == None or epoch.start_time < first_epoch.start_time:
+                        first_epoch = epoch
+                    if last_epoch == None or epoch.start_time > last_epoch.start_time:
+                        last_epoch = epoch
+
+            if col_epochs_read < 6:
+                epoch = col_epoch_queue.get_nowait()
+                if epoch:
+                    col_data[epoch.index]["active"].append(epoch)
+                    col_epochs_read += 1
+                    if first_epoch == None or epoch.start_time < first_epoch.start_time:
+                        first_epoch = epoch
+                    if last_epoch == None or epoch.start_time > last_epoch.start_time:
+                        last_epoch = epoch
+        except:
+            pass
 
         #==========================================================#
         #                 Read Sample From LSL                     #
@@ -287,30 +327,8 @@ if __name__ == '__main__':
             # Get sample and time_stamp from data stream
             sample, time_stamp = inlet.pull_sample(timeout=0.0)
             # Store the sample locally
-            if sample != None:
+            if sample != None and first_epoch != None and time_stamp >= first_epoch.start_time and time_stamp <= last_epoch.start_time + config.EPOCH_LENGTH:
                 update_data_history(data_history, time_stamp, get_desired_channels(sample, config.CHANNELS))
-
-        #==========================================================#
-        #            Read Epochs Created by the GUI                #
-        #==========================================================#
-
-        # reference to the most recent epoch
-        epoch = None
-        
-        # Try reading from both queues and updating the data dictionaries
-        try:
-            if row_epochs_read < 6:
-                epoch = row_epoch_queue.get_nowait()
-                if epoch:
-                    row_data[epoch.index]["active"].append(epoch)
-                    row_epochs_read += 1
-            if col_epochs_read < 6:
-                epoch = col_epoch_queue.get_nowait()
-                if epoch:
-                    col_data[epoch.index]["active"].append(epoch)
-                    col_epochs_read += 1
-        except:
-            pass
 
         #==========================================================#
         #          Processing the End of the Sequence              #
@@ -332,38 +350,42 @@ if __name__ == '__main__':
 
             # Get remaining data pertaining to last epoch
             if not args.gui_only:
-                while time_stamp != None and time_stamp <= epoch.start_time + config.EPOCH_LENGTH:
+                while time_stamp != None and time_stamp <= last_epoch.start_time + config.EPOCH_LENGTH:
                     print "Getting remaining data from queue..."
                     sample, time_stamp = inlet.pull_sample(timeout=0.1)
                     update_data_history(data_history, time_stamp, get_desired_channels(sample, config.CHANNELS))
-
+            
+                for t in data_history.keys():
+                    if t < first_epoch.start_time or t > last_epoch.start_time + config.EPOCH_LENGTH:
+                        del data_history[t]
+                        
             #==========================================================#
             #                     Filtering Data                       #
             #==========================================================#
-            """
-            # Move all data to an np array
-            all_data = []
-            for sample_time in data_history:
-                all_data.append(data_history[sample_time])
-            all_data = np.array(all_data)
+            if config.FILTER_DATA:
+                # Move all data to an np array
+                all_data = []
+                for sample_time in data_history:
+                    all_data.append(data_history[sample_time])
+                all_data = np.array(all_data)
 
-            
-            print np.shape(all_data)
+                
+                print np.shape(all_data)
 
-            # Replace each column with the filtered version
-            if len(all_data) > 0:
-                for channel in range(len(all_data[0])):
-                    filtered_data = butter_bandpass_filter(all_data[:,channel],
-                                                            config.FILTER_LOWCUT,
-                                                            config.FILTER_HIGHCUT,
-                                                            config.SAMPLING_RATE,
-                                                            order=config.FILTER_ORDER)
-                    all_data[:,channel] = filtered_data
+                # Replace each column with the filtered version
+                if len(all_data) > 0:
+                    for channel in range(len(all_data[0])):
+                        filtered_data = butter_bandpass_filter(all_data[:,channel],
+                                                                config.FILTER_LOWCUT,
+                                                                config.FILTER_HIGHCUT,
+                                                                config.SAMPLING_RATE,
+                                                                order=config.FILTER_ORDER)
+                        all_data[:,channel] = filtered_data
 
-            # Update the data history dictionary
-            for i in range(len(all_data)):
-                data_history[sorted(data_history.keys())[i]] = all_data[i,:].tolist()
-            """
+                # Update the data history dictionary
+                for i in range(len(all_data)):
+                    data_history[sorted(data_history.keys())[i]] = all_data[i,:].tolist()
+                
             #==========================================================#
             #               Splitting Data into Epochs                 #
             #==========================================================#
@@ -383,9 +405,7 @@ if __name__ == '__main__':
             print "Done splitting."
 
             # Clear all data up to the start_time of last epoch
-            for key in sorted(data_history.keys()):
-                if key <= epoch.start_time:
-                    del data_history[key]
+            data_history.clear()
 
             #==========================================================#
             #                Averaging Together Epochs                 #
@@ -395,7 +415,7 @@ if __name__ == '__main__':
             for row in range(len(row_data)):
                 # Sum the channel values
                 for ep in row_data[row]["past"]:
-                    data = np.array(ep.sample_data);
+                    data = np.array(ep.sample_data)
                     for sample_num in range(len(data) - 1):
                         row_averages[row][sample_num,0:len(config.CHANNELS) - 1] = row_averages[row][sample_num,0:len(config.CHANNELS) - 1] + data[sample_num,0:len(config.CHANNELS) - 1]
                 # Divide by the # of epochs for the row
@@ -405,7 +425,7 @@ if __name__ == '__main__':
             for col in range(len(col_data)):
                 # Sum the channel values
                 for ep in col_data[col]["past"]:
-                    data = np.array(ep.sample_data);
+                    data = np.array(ep.sample_data)
                     for sample_num in range(len(data) - 1):
                         col_averages[col][sample_num,0:len(config.CHANNELS) - 1] = col_averages[col][sample_num,0:len(config.CHANNELS) - 1] + data[sample_num,0:len(config.CHANNELS) - 1]
                 # Divide by the # of epochs for the column
@@ -415,14 +435,14 @@ if __name__ == '__main__':
             #         Classification or Storage for Training           #
             #==========================================================#
             if args.mode == 'live':
-                # Tuples for deicsion making (index, # of positive p300s)
+                # Tuples for deicsion making (index of row/col, # of positive p300 predictions)
                 predicted_col = (-1, -1)
                 predicted_row = (-1, -1)
 
                 # pass row data from this past trial to the trained classifier
                 for row_index in range(len(row_averages)):
                     prediction = classifier.predict(np.transpose(row_averages[row_index])).tolist()
-                    print "Row#%d Prediction:" % row_index
+                    print "Row # %d Prediction:" % row_index
                     print prediction
                     false_count = prediction.count(0)
                     pos_count = prediction.count(1)
@@ -431,7 +451,7 @@ if __name__ == '__main__':
                 # pass col data from this past trial to the trained classifier
                 for col_index in range(len(col_averages)):
                     prediction = classifier.predict(np.transpose(col_averages[col_index])).tolist()
-                    print "Col#%d Prediction:" % col_index
+                    print "Col #%d Prediction:" % col_index
                     print prediction
                     false_count = prediction.count(0)
                     pos_count = prediction.count(1)
@@ -470,6 +490,9 @@ if __name__ == '__main__':
             
             # Reset counter
             sequences_complete = 0
+            epoch = None
+            first_epoch = None
+            last_epoch = None
 
             if args.mode == 'train':
                 # Select a random row and column for training this trial
@@ -478,7 +501,17 @@ if __name__ == '__main__':
                 # Send these over the pipe to the GUI
                 main_conn.send(["train", "row", p300_row])
                 main_conn.send(["train", "col", p300_col])
+                # Clear data history for the next trial
+                data_history.clear()
+            
+            print "There are %d samples in the history" % len(data_history)
+    
+    #==========================================================#
+    #                 Disconnect LSL Stream                    #
+    #==========================================================#
 
+    if not args.gui_only:
+        inlet.close_stream()
 
     #==========================================================#
     #                       Training                           #
