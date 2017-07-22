@@ -237,6 +237,7 @@ class P300GUI(tk.Frame):
             
             # Get row and column of character to be highlighted for training
             if self.trial_col == -1 and self.trial_row == -1:
+                print "Waiting to receive next training character..."
                 msg = self.character_pipe.recv()
                 if msg[0] == 'train':
                     self.trial_row = msg[2]
@@ -345,7 +346,7 @@ class P300GUI(tk.Frame):
         if cell_num <= 25:
             return chr(65 + cell_num)
         else:
-            return chr(10 + (cell_num - 25))
+            return cell_num - 26
         
     def draw(self):
         """Redraws the canvas"""

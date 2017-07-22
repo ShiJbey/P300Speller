@@ -100,7 +100,7 @@ if __name__ == '__main__':
         if example_class != -1:
             X = np.vstack((X, example_data))
             y = np.append(y, example_class)
-            
+    
     print np.shape(X)
     print np.shape(y)
 
