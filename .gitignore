@@ -3,7 +3,10 @@
 *.swp
 __pycache__
 p300SpellerLog.txt
-./OpenBCI_Python/bluepy/
 csv/*/
+csv/*
+test.py
 .vscode/
 *.mat
+*.pkl
+plot_classifier.py

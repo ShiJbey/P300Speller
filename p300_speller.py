@@ -16,10 +16,11 @@ import random
 import Tkinter as tk
 # External library code
 from pylsl import StreamInlet, resolve_stream
+import pylsl
 import numpy as np
 from sklearn import svm
 # Custom modules
-from butterworth_bandpass import butter_bandpass_filter
+from butter_filters import butter_bandpass_filter, butter_highpass_filter, butter_lowpass_filter
 from plot_classifier import *
 import speller_gui as gui
 import config
@@ -29,25 +30,24 @@ PATH_DELIM = '/'
 if os.name == 'nt':
     PATH_DELIM = '\\'
 
-class EEGEpoch(object):
+SAMPLES_PER_EPOCH = config.EPOCH_LENGTH * config.SAMPLING_RATE
+
+class Epoch(object):
+
     """Manages segments of EEG epoch data"""
     def __init__(self, is_row, index, start_time, is_p300=False):
         self.is_row = is_row            # Boolean indicating if this epoch is for a row or column
         self.index = index              # Row/Col index of this epoch
         self.start_time = start_time    # Starting time of this epoch
         self.sample_data = None         # Numpy 2D array of sample data (sample X channel)
-        self.is_p300 = is_p300          # Set to true if there is supposed to be P300 (used in training) 
+        self.is_p300 = is_p300          # Set to true if there is supposed to be P300 (used in training)
 
     def is_within_epoch(self, sample_time):
         """Returns true if the given time is within this given epoch"""
         return (sample_time >= self.start_time
                 and sample_time <= self.start_time + config.EPOCH_LENGTH)
 
-    def __str__(self):
-        return ("Start: %s \nActive?: %s \nNum Samples: %s"
-                %(self.start_time, self.active, len(self.sample_data)))
-
-    def output_to_csv(self, epoch_num, directory=str(config.CSV_DIRECTORY),delim=","):
+    def output_to_csv(self, epoch_num, directory=str(config.CSV_DIRECTORY), delim=","):
         """Output the data held by this epoch to a csv file"""
         filename = ""
         if self.is_row:
@@ -57,10 +57,16 @@ class EEGEpoch(object):
         filename += str(self.index) + "_epoch" + "_" + str(epoch_num) + ".csv"
 
         # First line has the starting time
-        with open(directory + str(filename), 'w') as out_file:
-            out_file.write(str(repr(self.start_time)) + "\n")
+        with open(directory + str(filename), 'w+') as out_file:
+            out_file.write(str(repr(self.start_time)))
+            # Write a 0 or 1 indicating classification
+            if self.is_p300:
+                out_file.write(", 1\n")
+            else:
+                out_file.write(", 0\n")
+            
             # All following lines are organized one sample per
-            #  row and each column is a different channel
+            # row and each column is a different channel
             for sample in self.sample_data:
                 csv_row = ""
                 for voltage in sample:
@@ -70,56 +76,75 @@ class EEGEpoch(object):
                 csv_row += "\n"
                 out_file.write(csv_row)
 
-def get_epoch_data(start_time, data_hist):
-    """Loops through the data history and returns a numpy array of sample data"""
-    # 2D array of sample data
-    data = []
+    def get_epoch_data(self, data_hist):
+        """Gets all the data for this epoch from a given array of sample data history"""
+        index_of_first_sample = -1
 
-    for sample in data_hist:
-        if sample[0] >= start_time and sample[0] < start_time + config.EPOCH_LENGTH:
-            data.append(sample)
-    
-    return np.array(data)
+        for sample_index in range(len(data_hist)):
+            if data_hist[sample_index,0] <= self.start_time:
+                index_of_first_sample = sample_index
+            elif data_hist[sample_index,0] > self.start_time:
+                if index_of_first_sample == -1:
+                    index_of_first_sample = sample_index
+                    break
+        
+        self.sample_data = np.array(data_hist[
+                                        index_of_first_sample:index_of_first_sample + SAMPLES_PER_EPOCH + 1,1:],
+                                    dtype=np.float64)
 
-    """
-    # Loop through the list of keys until we find the sample
-    #  closest to the start time
-    closest_time = -1
-    for read_time in sorted(data_hist.keys()):
-        if read_time <= start_time:
-            # Overwite until we get a time closes to the start_time
-            closest_time = read_time
-        elif read_time > start_time:
-            break
+def write_raw_to_csv(data_hist, reference_time, file_path, delim=","):
+    """Given an array of sample data arrays, writes them to a file"""
+    with open(str(file_path), 'a+') as out_file:
+        for sample in data_hist:
+            csv_row = ""
+            for col_index in range(len(sample)):
+                if col_index == 0:
+                    # Writes the time of this sample as the change it time
+                    # from the start of the application, to its collection
+                    csvRow += sample[col_index] - reference_time
+                else:
+                    csv_row += str(value)
+                csv_row += delim
+            csv_row = csv_row[:-1]
+            csv_row += "\n"
+            out_file.write(csv_row)
 
-    # Return empty list
-    if closest_time == -1:
-        return data
+def output_rc_epochs(rc_data, directory=config.CSV_DIRECTORY):
+    """Outputs a dictionary of epochs to csv files"""
+    for row_col in rc_data:
+        for epoch in row_col
 
-    # Get all samples for the epic
-    start_sample_index = sorted(data_hist.keys()).index(closest_time)
-    samples_per_epoch = config.EPOCH_LENGTH * config.SAMPLING_RATE
-    sample_times = sorted(data_hist.keys())[
-        start_sample_index:start_sample_index + (samples_per_epoch + 1)]
+    for rc_index in range(len(data_dict)):
+        for epoch_index in range(len(data_dict[rc_index]["past"])):
+            epoch = data_dict[rc_index]["past"][epoch_index]
+            epoch.output_to_csv(epoch_index, directory=directory)
 
-    # Append the sample data for all the samples
-    for time in sample_times:
-        data.append(data_hist[time])
-    """
-
-    return data 
-
-def update_data_history(history, time_stamp, sample):
-    """Adds the sample channel data to the dict under its read time"""
-    history = history
+def output_epoch_average_list(avg_list, file_path, name_root, trial_num, p300_index):
+    """Outputs the data held inside of the row/col_average lists to a .csv file"""
+    for rc_index in range(len(avg_list)):
+        rc = avg_list[rc_index]
+        with open(file_path + name_root + "_" + str(rc_index) + "_" + str(trial_num) + ".csv", "w+") as outfile:
+            if rc_index == p300_index:
+                outfile.write("1\n")
+            else:
+                outfile.write("0\n")
+            for sample in rc:
+                csv_row = ""
+                for col in sample:
+                    csv_row += str(col)
+                    csv_row += ","
+                csv_row = csv_row[:-1]
+                csv_row += "\n"
+                outfile.write(csv_row)
 
 def select_rand_element(x):
-        """Selects element from list 'x' and returns it"""
-        rand_index = random.randint(0, len(x) - 1)
-        elem = x[rand_index]
-        return elem
+    """Selects element from list 'x' and returns it"""
+    rand_index = random.randint(0, len(x) - 1)
+    elem = x[rand_index]
+    return elem
 
 def get_desired_channels(sample, index_list):
+    """Returns python list of desired channel data from an EEG sample"""
     new_sample = []
     for i in range(len(sample)):
         if i in index_list:
@@ -147,35 +172,57 @@ if __name__ == '__main__':
     #==========================================================#
     #             Collect command line arguments               #
     #==========================================================#
-
-    def str2bool(val):
-        """Converts a string value to a boolean value."""
-        if val.lower() in ('yes', 'true', 't', 'y', '1', ''):
-            return True
-        elif val.lower() in ('no', 'false', 'f', 'n', '0'):
-            return False
-        else:
-            raise argparse.ArgumentTypeError('Boolean value expected')
-
-    
     parser = argparse.ArgumentParser(description='Runs the P300 application')
-    parser.add_argument('--mode',
-                        dest='mode',
-                        type=str,
-                        metavar='mode',
-                        default='train',
+    parser.add_argument('-t','--train',
+                        dest='training_mode',
+                        action='store_true',
+                        default=True,
                         help='Runs the gui in training mode and '
-                        'creates a new classifiers with the data')
-    parser.add_argument('--gui_only',
-                        metavar='gui_only',
-                        type=str2bool,
+                        'creates a new classifier with the data.')
+    parser.add_argument('-l','--live',
+                        dest='live_mode',
+                        action='store_true',
+                        default=False,
+                        help='Runs the gui in live mode and '
+                        'loads a classifier for making spelling predictions.')
+    parser.add_argument('-s', '--simulate',
+                        dest="simulation_data_path",
+                        type=str,
+                        nargs=1,
+                        default="",
+                        help='Runs the speller using simulation data')
+    parser.add_argument('--gui-only',
+                        dest="gui_only",
+                        action='store_true',
                         default=False,
                         help='Only runs the gui in the live mode '
-                        'without connecting to LSL data stream')
+                        'without connecting to LSL data stream.')
+    parser.add_argument('--output_raw',
+                        dest="output_raw",
+                        action='store_true',
+                        help='Writes the raw data collected to a'
+                        'CSV file to be used at a later time.')
+    parser.add_argument('--output_epochs',
+                        dest="output_epochs",
+                        action='store_true',
+                        default=False,
+                        help='Writes the epoch data collected to'
+                        ' CSV files.')
+    parser.add_argument('-v', '--verbose',
+                        dest='verbose',
+                        action='store_true',
+                        default=False,
+                        help = 'Prints the current status of the'
+                        'application to the terminal')
     args = parser.parse_args()
 
-    if not (args.mode == 'train' or args.mode == 'live'):
-        raise argparse.ArgumentTypeError('Mode needs tp be either \'train\' or \'live\'')
+    if args.live_mode:
+        args.training_mode = False
+
+    if (args.live_mode and args.training_mode or
+        args.training_mode and args.simulation_data_path != '' or
+        args.live_mode and args.simulation_data_path != ''):
+        raise parser.error("Only one mode (train, live, or simulate) may be specified at a time.")
 
     #==========================================================#
     #              Import and Set-up Classifier                #
@@ -183,7 +230,7 @@ if __name__ == '__main__':
 
     classifier = None
     # Exit application if no classifier '.pkl' file can be found
-    if args.mode == 'live':
+    if args.live_mode:
         if os.path.exists(DIR_PATH + PATH_DELIM + str(config.CLASSIFIER_FILENAME)):
             # Import the classifier
             pkl_file = open(DIR_PATH + PATH_DELIM + str(config.CLASSIFIER_FILENAME), 'rb')
@@ -202,8 +249,15 @@ if __name__ == '__main__':
     # Pipe to send a predicted character to the gui to update the spelling buffer
     main_conn, gui_conn = Pipe()
 
-    # Matrix of sample data [[read_time,c1,c2,...cn],...]
-    data_history = np.asmatrix(np.zeros((0,1 + len(config.CHANNELS))), dtype=np.float64)
+    # 2D array of sample data [[read_time,c1,c2,...cn],...]
+    data_history = np.zeros((0,1 + len(config.CHANNELS)), dtype=np.float64)
+    
+    # Sets up path for outputing the raw data
+    if args.output_raw or args.output_epochs:
+        output_dir = DIR_PATH + PATH_DELIM + str(config.CSV_DIRECTORY) + PATH_DELIM + datetime.datetime.now().strftime("%I-%M-%S%p%B_%d_%Y") + PATH_DELIM
+        if not os.path.exists(output_dir):
+            os.mkdir(output_dir)
+        data_filename = datetime.datetime.now().strftime("%I-%M-%S%p%B_%d_%Y") + "RawData.csv"
 
     # List of dictionaries holding epoch objects
     row_data = range(6)
@@ -222,24 +276,24 @@ if __name__ == '__main__':
     col_data[5] = {"active":[], "past":[]}
 
     # List of numpy matrices. Each matrix hold the average of the sample data for each channel
-    samples_per_epoch = config.EPOCH_LENGTH * config.SAMPLING_RATE
+    
     row_averages = range(6)
-    row_averages[0] = np.zeros((samples_per_epoch,len(config.CHANNELS)), dtype=np.float64)
-    row_averages[1] = np.zeros((samples_per_epoch,len(config.CHANNELS)), dtype=np.float64)
-    row_averages[2] = np.zeros((samples_per_epoch,len(config.CHANNELS)), dtype=np.float64)
-    row_averages[3] = np.zeros((samples_per_epoch,len(config.CHANNELS)), dtype=np.float64)
-    row_averages[4] = np.zeros((samples_per_epoch,len(config.CHANNELS)), dtype=np.float64)
-    row_averages[5] = np.zeros((samples_per_epoch,len(config.CHANNELS)), dtype=np.float64)
+    row_averages[0] = np.zeros((SAMPLES_PER_EPOCH,len(config.CHANNELS)), dtype=np.float64)
+    row_averages[1] = np.zeros((SAMPLES_PER_EPOCH,len(config.CHANNELS)), dtype=np.float64)
+    row_averages[2] = np.zeros((SAMPLES_PER_EPOCH,len(config.CHANNELS)), dtype=np.float64)
+    row_averages[3] = np.zeros((SAMPLES_PER_EPOCH,len(config.CHANNELS)), dtype=np.float64)
+    row_averages[4] = np.zeros((SAMPLES_PER_EPOCH,len(config.CHANNELS)), dtype=np.float64)
+    row_averages[5] = np.zeros((SAMPLES_PER_EPOCH,len(config.CHANNELS)), dtype=np.float64)
     col_averages = range(6)
-    col_averages[0] = np.zeros((samples_per_epoch,len(config.CHANNELS)), dtype=np.float64)
-    col_averages[1] = np.zeros((samples_per_epoch,len(config.CHANNELS)), dtype=np.float64)
-    col_averages[2] = np.zeros((samples_per_epoch,len(config.CHANNELS)), dtype=np.float64)
-    col_averages[3] = np.zeros((samples_per_epoch,len(config.CHANNELS)), dtype=np.float64)
-    col_averages[4] = np.zeros((samples_per_epoch,len(config.CHANNELS)), dtype=np.float64)
-    col_averages[5] = np.zeros((samples_per_epoch,len(config.CHANNELS)), dtype=np.float64)
+    col_averages[0] = np.zeros((SAMPLES_PER_EPOCH,len(config.CHANNELS)), dtype=np.float64)
+    col_averages[1] = np.zeros((SAMPLES_PER_EPOCH,len(config.CHANNELS)), dtype=np.float64)
+    col_averages[2] = np.zeros((SAMPLES_PER_EPOCH,len(config.CHANNELS)), dtype=np.float64)
+    col_averages[3] = np.zeros((SAMPLES_PER_EPOCH,len(config.CHANNELS)), dtype=np.float64)
+    col_averages[4] = np.zeros((SAMPLES_PER_EPOCH,len(config.CHANNELS)), dtype=np.float64)
+    col_averages[5] = np.zeros((SAMPLES_PER_EPOCH,len(config.CHANNELS)), dtype=np.float64)
 
     # Holds all of the training examples
-    X = np.asmatrix(np.zeros((0,len(config.CHANNELS))), dtype=np.float64)
+    X = np.zeros((0,SAMPLES_PER_EPOCH), dtype=np.float64)
     # Holds all of the example classifications
     y = np.array([])
     
@@ -248,21 +302,30 @@ if __name__ == '__main__':
     #==========================================================#
     
     # Create processes for the GUI and the EEG collection
-    gui_process = Process(target=run_gui, args=(row_epoch_queue, col_epoch_queue, gui_conn, (args.mode == 'train')))
+    gui_process = Process(target=run_gui, args=(row_epoch_queue, col_epoch_queue, gui_conn, args.training_mode))
     # Start the GUI process
     gui_process.start()
 
     #==========================================================#
-    #                 Connect to LSL Stream                    #
+    #        Connect to LSL Stream or Simulation Data          #
     #==========================================================#
 
-    if not args.gui_only:
+    app_start_time = pylsl.local_clock()
+
+    if not args.gui_only and (args.live_mode or args.training_mode):
         # Look for the stream of EEG data on the network
-        print "Looking for EEG stream..."
+        if args.verbose:
+            print "Looking for EEG stream..."
         streams = resolve_stream('type', 'EEG')
-        print "Stream found!"
+        if args.verbose:
+            print "Stream found!"
         # Create inlet to read from stream
         inlet = StreamInlet(streams[0])
+
+    elif args.simulation_data_path != '':
+        # Load the csv file at the given path
+        infile = open(args.simulation_data_path, 'rb')
+        data_reader = csv.reader(infile)
     
     #==========================================================#
     #             Data Collection and Manipulation             #
@@ -280,7 +343,7 @@ if __name__ == '__main__':
     first_epoch = None         # Reference to the first epoch created in the current trial
     last_epoch = None          # Reference to the last epoch created in the current trial
 
-    if args.mode == 'train':
+    if args.training_mode:
         # Select a random row and column for training this trial
         p300_row = select_rand_element(row_options)
         p300_col = select_rand_element(col_options)
@@ -323,12 +386,26 @@ if __name__ == '__main__':
         #                 Read Sample From LSL                     #
         #==========================================================#
 
-        if not args.gui_only:
+        if not args.gui_only and (args.live_mode or args.training_mode):
             # Get sample and time_stamp from data stream
             sample, time_stamp = inlet.pull_sample(timeout=0.0)
-            # Store the sample locally
+            # Store the sample in the data history
             if sample != None and first_epoch != None and time_stamp >= first_epoch.start_time and time_stamp <= last_epoch.start_time + config.EPOCH_LENGTH:
-                update_data_history(data_history, time_stamp, get_desired_channels(sample, config.CHANNELS))
+                sample_row = np.append(time_stamp, get_desired_channels(sample, config.CHANNELS))     
+                data_history = np.vstack((data_history, sample_row))
+
+        elif args.simulation_data_path != '':
+            # Pull a row from the csv file and add it to the history
+            try:
+                sample_row = np.array(data_reader.next()).astype(np.float64)
+                sample_row[0] = app_start_time + sample_row[0]
+                data_history = np.vstack((data_history, sample_row))
+            except:
+                print "Ran out of simulation data"
+                infile.close()
+                # Break out of the data collection loop
+                break
+        
 
         #==========================================================#
         #          Processing the End of the Sequence              #
@@ -348,76 +425,120 @@ if __name__ == '__main__':
         if sequences_complete >= config.SEQ_PER_TRIAL:
             trials_complete += 1
 
-            # Get remaining data pertaining to last epoch
-            if not args.gui_only:
-                while time_stamp != None and time_stamp <= last_epoch.start_time + config.EPOCH_LENGTH:
-                    print "Getting remaining data from queue..."
-                    sample, time_stamp = inlet.pull_sample(timeout=0.1)
-                    update_data_history(data_history, time_stamp, get_desired_channels(sample, config.CHANNELS))
             
-                for t in data_history.keys():
-                    if t < first_epoch.start_time or t > last_epoch.start_time + config.EPOCH_LENGTH:
-                        del data_history[t]
-                        
+            if not args.gui_only:
+                if args.simulation_data_path != '':
+                    while time_stamp <= last_epoch.start_time + config.EPOCH_LENGTH + .5:
+                            try:
+                                sample_row = np.array(data_reader.next()).astype(np.float64)
+                                sample_row[0] = app_start_time + sample_row[0]
+                                data_history = np.vstack((data_history, sample_row))
+                            except:
+                                print "Ran out of simulation data"
+                                infile.close()
+                                # Break out of the data collection loop
+                                break
+                else:
+                    # Get remaining data pertaining to last epoch
+                    while time_stamp <= last_epoch.start_time + config.EPOCH_LENGTH + .5:
+                        if args.verbose:
+                            print "Getting remaining data from queue..."
+                        sample, time_stamp = inlet.pull_sample(timeout=0.1)
+                        if sample != None:
+                            sample_row = np.append(time_stamp, get_desired_channels(sample, config.CHANNELS))
+                            if np.shape(data_history)[0] == 0:
+                                data_history = np.vstack((data_history, sample_row))
+                            else:
+                                data_history = np.vstack((data_history, sample_row))
+                        else:
+                            break
+
+                if args.output_raw:
+                    # Write the contents of the
+                    write_raw_to_csv(data_history, app_start_time, output_dir + data_filename)
+                    if args.verbose:
+                            print "Getting remaining data from queue..."
+                    
+                # Erase any samples that fall outside of this sequence
+                for row_index in range(len(data_history)):
+                    t = data_history[row_index, 0] 
+                    if t < first_epoch.start_time or t > last_epoch.start_time + config.EPOCH_LENGTH + .5:
+                        data_history = np.delete(data_history, row_index, 0)
+            
             #==========================================================#
             #                     Filtering Data                       #
             #==========================================================#
             if config.FILTER_DATA:
-                # Move all data to an np array
-                all_data = []
-                for sample_time in data_history:
-                    all_data.append(data_history[sample_time])
-                all_data = np.array(all_data)
-
-                
-                print np.shape(all_data)
-
-                # Replace each column with the filtered version
-                if len(all_data) > 0:
-                    for channel in range(len(all_data[0])):
-                        filtered_data = butter_bandpass_filter(all_data[:,channel],
-                                                                config.FILTER_LOWCUT,
-                                                                config.FILTER_HIGHCUT,
-                                                                config.SAMPLING_RATE,
-                                                                order=config.FILTER_ORDER)
-                        all_data[:,channel] = filtered_data
-
-                # Update the data history dictionary
-                for i in range(len(all_data)):
-                    data_history[sorted(data_history.keys())[i]] = all_data[i,:].tolist()
+                if args.verbose:
+                    print "Filtering Data"
+                # Replace each column in data_history with the filtered version
+                if len(data_history) > 0:
+                    for column_index in range(len(data_history[0])):
+                        if column_index > 0:
+                            # Filter with lowpasss and high pass
+                            data_history[:,column_index] = butter_lowpass_filter(data_history[:,column_index],
+                                                                                config.FILTER_HIGHCUT,
+                                                                                config.SAMPLING_RATE,
+                                                                                order=config.FILTER_ORDER)
+                            data_history[:,column_index] = butter_highpass_filter(data_history[:,column_index],
+                                                                                config.FILTER_LOWCUT,
+                                                                                config.SAMPLING_RATE,
+                                                                                order=config.FILTER_ORDER)
                 
             #==========================================================#
             #               Splitting Data into Epochs                 #
             #==========================================================#
-            
+
             # Fill and move epochs
-            print "Splitting into epochs."
+            if args.verbose:
+                print "Splitting into epochs."
             for row in range(len(row_data)):
                 for ep in row_data[row]["active"]:
-                    ep.sample_data = get_epoch_data(ep.start_time, data_history)
+                    ep.get_epoch_data(data_history)
                     row_data[row]["past"].append(ep)
                     row_data[row]["active"].remove(ep)
             for col in range(len(col_data)):
                 for ep in col_data[col]["active"]:
-                    ep.sample_data = get_epoch_data(ep.start_time, data_history)
+                    ep.get_epoch_data(data_history)
                     col_data[col]["past"].append(ep)
                     col_data[col]["active"].remove(ep)
-            print "Done splitting."
+            if args.verbose:
+                print "Done splitting."
+            
+            # Fill and move epochs
+            if args.verbose:
+                print "Splitting into epochs."
+            for row in range(len(row_data)):
+                for ep in row_data[row]["active"]:
+                    ep.get_epoch_data(data_history)
+                    row_data[row]["past"].append(ep)
+                    row_data[row]["active"].remove(ep)
+            for col in range(len(col_data)):
+                for ep in col_data[col]["active"]:
+                    ep.get_epoch_data(data_history)
+                    col_data[col]["past"].append(ep)
+                    col_data[col]["active"].remove(ep)
+            if args.verbose:
+                print "Done splitting."
 
             # Clear all data up to the start_time of last epoch
-            data_history.clear()
+            data_history = np.zeros((0,1 + len(config.CHANNELS)), dtype=np.float64)
 
             #==========================================================#
             #                Averaging Together Epochs                 #
             #==========================================================#
 
+            # Average the row data
+            for row in row_data:
+                for 
+
             # Average the rows
             for row in range(len(row_data)):
                 # Sum the channel values
                 for ep in row_data[row]["past"]:
-                    data = np.array(ep.sample_data)
+                    data = ep.sample_data
                     for sample_num in range(len(data) - 1):
-                        row_averages[row][sample_num,0:len(config.CHANNELS) - 1] = row_averages[row][sample_num,0:len(config.CHANNELS) - 1] + data[sample_num,0:len(config.CHANNELS) - 1]
+                        row_averages[row][sample_num,0:len(config.CHANNELS)] = row_averages[row][sample_num,0:len(config.CHANNELS)] + data[sample_num,0:len(config.CHANNELS)]
                 # Divide by the # of epochs for the row
                 row_averages[row] = row_averages[row] / len(row_data[row]["past"])
 
@@ -425,39 +546,58 @@ if __name__ == '__main__':
             for col in range(len(col_data)):
                 # Sum the channel values
                 for ep in col_data[col]["past"]:
-                    data = np.array(ep.sample_data)
+                    data = ep.sample_data
                     for sample_num in range(len(data) - 1):
-                        col_averages[col][sample_num,0:len(config.CHANNELS) - 1] = col_averages[col][sample_num,0:len(config.CHANNELS) - 1] + data[sample_num,0:len(config.CHANNELS) - 1]
+                        col_averages[col][sample_num,0:len(config.CHANNELS)] = col_averages[col][sample_num,0:len(config.CHANNELS)] + data[sample_num,0:len(config.CHANNELS)]
                 # Divide by the # of epochs for the column
                 col_averages[col] = col_averages[col] / len(col_data[col]["past"])
 
+            
+            if args.output_epochs and not args.gui_only:
+                output_epoch_average_list(row_averages, output_dir, "Col", trials_complete, p300_col)
+                output_epoch_average_list(col_averages, output_dir, "Row", trials_complete, p300_row)
             #==========================================================#
             #         Classification or Storage for Training           #
             #==========================================================#
-            if args.mode == 'live':
-                # Tuples for deicsion making (index of row/col, # of positive p300 predictions)
-                predicted_col = (-1, -1)
-                predicted_row = (-1, -1)
+            if args.live_mode:
+                # Tuples for deicsion making (index of row/col, conf score,  # of positive p300 predictions)
+                predicted_col = (-1, -1, -1)
+                predicted_row = (-1, -1, -1)
 
                 # pass row data from this past trial to the trained classifier
                 for row_index in range(len(row_averages)):
                     prediction = classifier.predict(np.transpose(row_averages[row_index])).tolist()
+                    confidence = classifier.decision_function(np.transpose(row_averages[row_index])).tolist()
                     print "Row # %d Prediction:" % row_index
                     print prediction
+                    print "Confidence:"
+                    print confidence
+                    confidence_sum = np.sum(confidence)
                     false_count = prediction.count(0)
                     pos_count = prediction.count(1)
-                    if  pos_count > predicted_row[1]:
-                        predicted_row = (row_index, pos_count)
+                    if  pos_count > predicted_row[2]:
+                        predicted_row = (row_index, confidence_sum, pos_count)
+                    elif confidence_sum > 0 and confidence_sum > predicted_row[1]:
+                        predicted_row = (row_index, confidence_sum, pos_count)
+                
+                print ""
+               
                 # pass col data from this past trial to the trained classifier
                 for col_index in range(len(col_averages)):
                     prediction = classifier.predict(np.transpose(col_averages[col_index])).tolist()
+                    confidence = classifier.decision_function(np.transpose(col_averages[col_index]))
                     print "Col #%d Prediction:" % col_index
                     print prediction
+                    print "Confidence:"
+                    print confidence
+                    confidence_sum = np.sum(confidence)
                     false_count = prediction.count(0)
                     pos_count = prediction.count(1)
-                    if pos_count > predicted_col[1]:
-                        predicted_col = (col_index, pos_count)
-
+                    if pos_count > predicted_col[2]:
+                        predicted_col = (col_index, confidence_sum, pos_count)
+                    elif confidence_sum > 0 and confidence_sum > predicted_col[1]:
+                        predicted_col = (col_index, confidence_sum, pos_count)
+                    
                 main_conn.send(["prediction", "row", predicted_row[0]])
                 main_conn.send(["prediction", "col", predicted_col[0]])
 
@@ -465,28 +605,24 @@ if __name__ == '__main__':
                 # Add all row average data to the example lists
                 for row_index in range(len(row_averages)):
                     for channel_index in range(len(row_averages[row_index][0])):
-                        X.append(row_averages[row_index][:,channel_index].tolist())
+                        X = np.vstack((X, row_averages[row_index][:,channel_index]))
                         if row_index == p300_row:
-                            print "Positive row test case added"
-                            y.append(1)
+                            y = np.append(y,1)
                         else:
-                            y.append(0)
+                            y = np.append(y,0)
                 # Add all col average data to the example lists
                 for col_index in range(len(col_averages)):
                     for channel_index in range(len(col_averages[col_index][0])):
-                        X.append(col_averages[col_index][:,channel_index].tolist())
+                        X = np.vstack((X, col_averages[col_index][:,channel_index]))
                         if col_index == p300_col:
-                            print "Positive col test case added"
-                            y.append(1)
+                            y = np.append(y,1)
                         else:
-                            y.append(0)
-
-                
+                            y = np.append(y,0)             
 
             # Reset averagees to all zeros
             for i in range(6):
-                row_averages[i] = np.zeros((samples_per_epoch,len(config.CHANNELS)))
-                col_averages[i] = np.zeros((samples_per_epoch,len(config.CHANNELS)))
+                row_averages[i] = np.zeros((SAMPLES_PER_EPOCH,len(config.CHANNELS)))
+                col_averages[i] = np.zeros((SAMPLES_PER_EPOCH,len(config.CHANNELS)))
             
             # Reset counter
             sequences_complete = 0
@@ -494,7 +630,7 @@ if __name__ == '__main__':
             first_epoch = None
             last_epoch = None
 
-            if args.mode == 'train':
+            if args.training_mode:
                 # Select a random row and column for training this trial
                 p300_row = select_rand_element(row_options)
                 p300_col = select_rand_element(col_options)
@@ -502,55 +638,48 @@ if __name__ == '__main__':
                 main_conn.send(["train", "row", p300_row])
                 main_conn.send(["train", "col", p300_col])
                 # Clear data history for the next trial
-                data_history.clear()
-            
-            print "There are %d samples in the history" % len(data_history)
+                data_history = np.zeros((0,1 + len(config.CHANNELS)), dtype=np.float64)
     
     #==========================================================#
     #                 Disconnect LSL Stream                    #
     #==========================================================#
 
-    if not args.gui_only:
+    if not args.gui_only and (args.live_mode or args.training_mode):
         inlet.close_stream()
-
-    #==========================================================#
-    #                       Training                           #
-    #==========================================================#
-
-    if args.mode == 'train' and not args.gui_only: 
-        classifier = svm.SVC(kernel='linear')
-        print "Training classifier."
-        X = np.array(X)
-        y = np.array(y)
-        #print np.shape(X)
-        #print np.shape(y)
-        #plot_classifier(X,y)
-        classifier.fit(X,y)
-        # Export the classifier
-        print "Exporting classsifier."
-        pkl_file = open(DIR_PATH + PATH_DELIM + str(config.CLASSIFIER_FILENAME), 'wb')
-        pickle.dump(classifier, pkl_file)
-        print "Classifier trained and exported."
+        if args.verbose:
+            print "Closed data stream."
+    elif args.simulation_data_path != '':
+        infile.close()
 
     #==========================================================#
     #                         Other                            #
     #==========================================================#
 
     # Output the the epics to CSV files
-    if config.OUTPUT_CSV and not args.gui_only:
-        output_dir = DIR_PATH + PATH_DELIM + str(config.CSV_DIRECTORY) + PATH_DELIM + datetime.datetime.now().strftime("%I-%M-%S%p%B_%d_%Y") + PATH_DELIM
+    if args.output_epochs and not args.gui_only:
+
+        """
+        
         
         if not os.path.exists(output_dir):
             os.mkdir(output_dir)
         
-        print "Writing output to: " + output_dir
+        if args.verbose:
+            print "Writing output to: " + output_dir
+        output_rc_epochs(row_data, directory=output_dir)
+        output_rc_epochs(col_data, directory=output_dir)
+        """
+        """
         for col in range(len(col_data)):
             for i  in range(len(col_data[col]["past"]) - 1):
                 ep = col_data[col]["past"][i]
                 ep.output_to_csv(i, directory=output_dir)
+        
 
         for row in range(len(row_data)):
             for i  in range(len(row_data[row]["past"]) - 1):
                 ep = row_data[row]["past"][i]
                 ep.output_to_csv(i, directory=output_dir)
-        print "Done."
+        """
+        if args.verbose:
+            print "Done."

@@ -2,7 +2,7 @@ import time
 import random
 import Tkinter as tk
 import pylsl
-from p300_speller import EEGEpoch
+from p300_speller import Epoch
 import config
 
 class SelectionRectangle():
@@ -231,6 +231,10 @@ class P300GUI(tk.Frame):
         
         # Highlight the character when we are currently not in the middle of a trial
         if not self.trial_in_progress and self.epochs_made == 0:
+
+            self.trial_row = -1
+            self.trial_col = -1
+            
             # Get row and column of character to be highlighted for training
             if self.trial_col == -1 and self.trial_row == -1:
                 msg = self.character_pipe.recv()
@@ -248,7 +252,7 @@ class P300GUI(tk.Frame):
             self.char_highlighted = True
             self.trial_in_progress = True
             self.draw()
-            print "Displaying training character"
+            print "Displaying training character: %s" % str(self.get_character(self.trial_row, self.trial_col))
             # Wait 2 seconds (2000 milliseconds)
             self.master.after(3000, self.update)
 
@@ -258,8 +262,6 @@ class P300GUI(tk.Frame):
             if self.char_highlighted:
                 self.char_highlighted = False
                 self.draw()
-                self.trial_row = -1
-                self.trial_col = -1
                 print "Removed character highlight"
                 print "Starting Trial # %d" % self.trial_count
 
@@ -281,7 +283,7 @@ class P300GUI(tk.Frame):
                 self.selection_rect.visible = True
 
                 if self.selection_rect.end_of_sequence():
-                    print "Ending Sequence"
+                    print "Ending Sequence %d" % self.sequence_count
                     self.sequence_count += 1
                     if self.sequence_count >= config.SEQ_PER_TRIAL:
                         self.trial_count += 1
@@ -318,7 +320,7 @@ class P300GUI(tk.Frame):
             # Set visibility to visible for next update call
             self.selection_rect.visible = True
             if self.selection_rect.end_of_sequence():
-                print "Ending Sequence"
+                print "Ending Sequence %d" % self.sequence_count
                 self.sequence_count += 1
                 if self.sequence_count >= config.SEQ_PER_TRIAL:
                     self.sequence_count = 0
@@ -332,7 +334,7 @@ class P300GUI(tk.Frame):
                     print "Predicted Row: %d, Predicted Col: %d" % (self.predicted_row, self.predicted_col)
                     predicted_char = self.get_character(self.predicted_row, self.predicted_col)
                     self.add_char(predicted_char)
-                print "Starting sequence"
+                print "Starting sequence %d" % self.sequence_count
                 self.master.after(config.EPOCH_LENGTH * 1000 + self.intermediate_time, self.update)
             else:
                 # Keep the rect invisible for a set amount of time
@@ -360,11 +362,13 @@ class P300GUI(tk.Frame):
         """Send a new epoch to the main process"""
         if self.selection_rect.is_vertical():
             index = self.selection_rect.get_index()
-            epoch = EEGEpoch(False, index, pylsl.local_clock())
+            epoch = Epoch(False, index, pylsl.local_clock())
+            epoch.is_p300 = index == self.trial_col
             self.col_epoch_queue.put_nowait(epoch)
         else:
             index = self.selection_rect.get_index()
-            epoch = EEGEpoch(True, index, pylsl.local_clock())
+            epoch = Epoch(True, index, pylsl.local_clock())
+            epoch.is_p300 = index == self.trial_row
             self.row_epoch_queue.put_nowait(epoch)        
 
     def make_rectangle(self, orientation="vertical"):

@@ -6,12 +6,14 @@ imports them into numpy matricies and then,
 plots their data, averages their sample, and
 plots the average as well
 """
-import sys; sys.path.append('..')
+import sys
 import csv
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy import signal
 import config
+sys.path.append('..')
+
 
 
 samples_per_epoch = config.EPOCH_LENGTH * config.SAMPLING_RATE
@@ -20,7 +22,7 @@ def get_sample_data(filename, delim=","):
     """Returns a 2D-numpy array of the sample data from a given file"""
     data = []
     # Read in data from the csv file
-    with open("./" + filename, 'rb') as f:
+    with open(filename, 'rb') as f:
         reader = csv.reader(f)
         for row in reader:
             if len(row) > 1:
@@ -55,11 +57,11 @@ if __name__ == "__main__":
 
 
     # Array to hold the average across epochs
-    average = np.zeros((samples_per_epoch,config.NUM_CHANNELS))
+    average = np.zeros((samples_per_epoch,len(config.CHANNELS)))
     
     for epoch in epochs:
         for i in range(len(epoch)):
-            average[i,0:config.NUM_CHANNELS - 1] = average[i,0:config.NUM_CHANNELS - 1] + epoch[i,0:config.NUM_CHANNELS - 1]
+            average[i,0:len(config.CHANNELS) - 1] = average[i,0:len(config.CHANNELS) - 1] + epoch[i,0:len(config.CHANNELS) - 1]
   
     if len(epochs) != 0:
         average = average / float(len(epochs))
@@ -67,7 +69,7 @@ if __name__ == "__main__":
 
     # so we are going to have a figure for each channel
     time_between_samples = float(config.EPOCH_LENGTH) / config.SAMPLING_RATE
-    for i in range(config.NUM_CHANNELS):
+    for i in range(len(config.CHANNELS)):
         plt.figure("Channel %d" %(i + 1))
         if config.DISPLAY_AVERAGE:
             plt.plot(np.arange(0.0, float(config.EPOCH_LENGTH), time_between_samples), average[:,i])
