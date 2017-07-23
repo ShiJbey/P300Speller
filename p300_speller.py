@@ -175,8 +175,8 @@ def get_p300_prediction(clf, average_data):
     for index in range(len(average_data)):
         data = down_sample_data(average_data[index], config.SAMPLING_RATE, target_sample_rate=128)
         data = np.ravel(data)
-        predicted_class = clf.predict(data)
-        prediction_confidence = clf.decision_function(data)
+        predicted_class = clf.predict(np.reshape(data,(1, -1)))
+        prediction_confidence = clf.decision_function(np.reshape(data,(1, -1)))
         if predicted_class[0] == 1 and prediction_confidence[0] > best_prediction["confidence"]:
             best_prediction["index"] = index
             best_prediction["confidence"] = prediction_confidence
@@ -294,6 +294,8 @@ if __name__ == '__main__':
             
             classifier = pickle.load(pkl_file)
 
+            pkl_file.close()
+
             if args.verbose:
                 print "Classifier loaded from file."
         else:
@@ -303,17 +305,15 @@ if __name__ == '__main__':
     #              Set-up for Data Exporting                   #
     #==========================================================#
     
-    # Sets up path for outputing the raw data
-    if args.output_raw or args.output_epochs:
-        
-        OUTPUT_DIR = DIR_PATH + PATH_DELIM + str(config.CSV_DIRECTORY) + PATH_DELIM + datetime.datetime.now().strftime("%I-%M-%S%p%B_%d_%Y") + PATH_DELIM
-        RAW_DATA_FILENAME = datetime.datetime.now().strftime("%I-%M-%S%p%B_%d_%Y") + "RawData.csv"
-        
-        if not os.path.exists(OUTPUT_DIR):
-            if args.verbose:
-                print "Output directory does not exist"
-                print "Creating output directory at: %s" % (OUTPUT_DIR)
-            os.mkdir(OUTPUT_DIR)
+    # Sets up path for outputing the raw data    
+    OUTPUT_DIR = DIR_PATH + PATH_DELIM + str(config.CSV_DIRECTORY) + PATH_DELIM + datetime.datetime.now().strftime("%I-%M-%S%p%B_%d_%Y") + PATH_DELIM
+    RAW_DATA_FILENAME = datetime.datetime.now().strftime("%I-%M-%S%p%B_%d_%Y") + "RawData.csv"
+    
+    if not os.path.exists(OUTPUT_DIR):
+        if args.verbose:
+            print "Output directory does not exist"
+            print "Creating output directory at: %s" % (OUTPUT_DIR)
+        os.mkdir(OUTPUT_DIR)
 
     #==========================================================#
     #                  Set-up Data Structures                  #
@@ -597,17 +597,18 @@ if __name__ == '__main__':
             col_averages = average_epoch_data(col_epochs)
 
 
-            if args.output_epochs and not args.gui_only:
+            if not args.gui_only:
                 if args.verbose:
                     print "Outputing epoch averages for this trial"
 
                 output_epoch_average_list(row_averages, OUTPUT_DIR, "Col", trials_complete, p300_col)
                 output_epoch_average_list(col_averages, OUTPUT_DIR, "Row", trials_complete, p300_row)
                 
-                if args.verbose:
-                    print "Outputing regular epoch for this trial"
-                output_rc_epochs(row_epochs, directory=OUTPUT_DIR)
-                output_rc_epochs(col_epochs, directory=OUTPUT_DIR)
+                if args.output_epochs:
+                    if args.verbose:
+                        print "Outputing regular epoch for this trial"
+                    output_rc_epochs(row_epochs, directory=OUTPUT_DIR)
+                    output_rc_epochs(col_epochs, directory=OUTPUT_DIR)
             
             if args.verbose:
                 print "Clearing epoch data"

@@ -6,6 +6,7 @@ import csv
 import sys
 import os
 import math
+import pickle
 import numpy as np
 from sklearn import svm, preprocessing
 from sklearn.model_selection import cross_val_score
@@ -115,7 +116,14 @@ if __name__ == '__main__':
     scores = cross_val_score(classifier, X, y, cv=10)
     print "Done."
     print "Accuracy: %0.2f (+/- %0.2f)" % (scores.mean(), scores.std() * 2)
+
+    outfile = open(config.CLASSIFIER_FILENAME, 'wb')
+    pickle.dump(classifier, outfile)
+    outfile.close()
     
+    print "Exported classifier to: %s" % config.CLASSIFIER_FILENAME
+
+    """
     classifier = svm.SVC(kernel='poly', degree=3, C=1.0)
     print "Training Quadratic classifier."
     classifier.fit(X,y)
@@ -129,4 +137,5 @@ if __name__ == '__main__':
     scores = cross_val_score(classifier, X, y, cv=10)
     print "Done."
     print "Accuracy: %0.2f (+/- %0.2f)" % (scores.mean(), scores.std() * 2)
+    """
     
