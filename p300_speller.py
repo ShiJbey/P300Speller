@@ -20,6 +20,7 @@ import pylsl
 import numpy as np
 from sklearn import svm
 # Custom modules
+from epoch import Epoch
 from butter_filters import butter_bandpass_filter, butter_highpass_filter, butter_lowpass_filter
 from plot_classifier import *
 import speller_gui as gui
@@ -31,93 +32,48 @@ PATH_DELIM = '/'
 if os.name == 'nt':
     PATH_DELIM = '\\'
 
-SAMPLES_PER_EPOCH = config.EPOCH_LENGTH * config.SAMPLING_RATE
 
-class Epoch(object):
-
-    """Manages segments of EEG epoch data"""
-    def __init__(self, is_row, index, start_time, is_p300=False):
-        self.is_row = is_row            # Boolean indicating if this epoch is for a row or column
-        self.index = index              # Row/Col index of this epoch
-        self.start_time = start_time    # Starting time of this epoch
-        self.sample_data = None         # Numpy 2D array of sample data (sample X channel)
-        self.is_p300 = is_p300          # Set to true if there is supposed to be P300 (used in training)
-
-    def is_within_epoch(self, sample_time):
-        """Returns true if the given time is within this given epoch"""
-        return (sample_time >= self.start_time
-                and sample_time <= self.start_time + config.EPOCH_LENGTH)
-
-    def output_to_csv(self, epoch_num, directory=str(config.CSV_DIRECTORY), delim=","):
-        """Output the data held by this epoch to a csv file"""
-        filename = ""
-        if self.is_row:
-            filename += "Row_"
+def get_closest_epoch_time(target_time, epoch_times):
+    """Returns the closest epoch start time to a given target time"""
+    closest_time = -1
+    for ep_time in epoch_times:
+        if ep_time <= target_time:
+            closest_time = target_time
         else:
-            filename += "Col_"
-        filename += str(self.index) + "_epoch" + "_" + str(epoch_num) + ".csv"
+            if closest_time == -1:
+                closest_time = ep_time
+            break
+    return closest_time
 
-        # First line has the starting time
-        with open(directory + str(filename), 'w+') as out_file:
-            out_file.write(str(repr(self.start_time)))
-            # Write a 0 or 1 indicating classification
-            if self.is_p300:
-                out_file.write(", 1\n")
-            else:
-                out_file.write(", 0\n")
-            
-            # All following lines are organized one sample per
-            # row and each column is a different channel
-            for sample in self.sample_data:
-                csv_row = ""
-                for voltage in sample:
-                    csv_row += str(voltage)
-                    csv_row += delim
-                csv_row = csv_row[:-1]
-                csv_row += "\n"
-                out_file.write(csv_row)
-
-    def get_epoch_data(self, data_hist):
-        """Gets all the data for this epoch from a given array of sample data history"""
-        index_of_first_sample = -1
-
-        for sample_index in range(len(data_hist)):
-            if data_hist[sample_index,0] <= self.start_time:
-                index_of_first_sample = sample_index
-            elif data_hist[sample_index,0] > self.start_time:
-                if index_of_first_sample == -1:
-                    index_of_first_sample = sample_index
-                    break
-        
-        self.sample_data = np.array(data_hist[
-                                        index_of_first_sample:index_of_first_sample + SAMPLES_PER_EPOCH,1:],
-                                    dtype=np.float64)
-
-def write_raw_to_csv(data_hist, reference_time, file_path, delim=","):
-    """Given an array of sample data arrays, writes them to a file"""
+def write_raw_to_csv(data_hist, epoch_times, file_path, delim=","):
+    """Given an array of sample data arrays, writes the data to a file"""
+    # Sort the epoch times
+    epoch_times = sorted(epoch_times)
     with open(str(file_path), 'a+') as out_file:
         for sample in data_hist:
             csv_row = ""
-            for col_index in range(len(sample)):
-                if col_index == 0:
-                    # Writes the time of this sample as the change it time
-                    # from the start of the application, to its collection
-                    csvRow += sample[col_index] - reference_time
-                else:
-                    csv_row += str(value)
-                csv_row += delim
+            for index in range(len(sample))
+                if index == 0: 
+                    # Write the time of the sample
+                    sample_time = sample[index]
+                    csv_row += str(repr(sample_time))
+                    csv_row += delim
+                    if len(epoch_times) > 0:
+                        closest_time = get_closest_epoch_time(sample_time, epoch_times)
+                        
+
             csv_row = csv_row[:-1]
             csv_row += "\n"
             out_file.write(csv_row)
 
-def output_rc_epochs(rc_data, directory=config.CSV_DIRECTORY):
+def output_individual_epoch_list(rc_data, directory=config.CSV_DIRECTORY):
     """Outputs a dictionary of epochs to csv files"""
     for rc in rc_data:
         for epoch_index in range(len(rc)):
             epoch = rc[epoch_index]
             epoch.output_to_csv(epoch_index, directory=directory)
 
-def output_epoch_average_list(avg_list, file_path, name_root, trial_num, p300_index):
+def output_averaged_epoch_list(avg_list, file_path, name_root, trial_num, p300_index):
     """Outputs the data held inside of the row/col_average lists to a .csv file"""
     for rc_index in range(len(avg_list)):
         rc = avg_list[rc_index]
@@ -152,12 +108,12 @@ def get_desired_channels(sample, index_list):
 def average_epoch_data(epoch_data):
     """Given a list of lists of Epochs, returns a list of numpy 2D arrays of the average epoch data for each row/col"""
     average_data = [
-        np.zeros((SAMPLES_PER_EPOCH,len(config.CHANNELS)), dtype=np.float64),
-        np.zeros((SAMPLES_PER_EPOCH,len(config.CHANNELS)), dtype=np.float64),
-        np.zeros((SAMPLES_PER_EPOCH,len(config.CHANNELS)), dtype=np.float64),
-        np.zeros((SAMPLES_PER_EPOCH,len(config.CHANNELS)), dtype=np.float64),
-        np.zeros((SAMPLES_PER_EPOCH,len(config.CHANNELS)), dtype=np.float64),
-        np.zeros((SAMPLES_PER_EPOCH,len(config.CHANNELS)), dtype=np.float64)]
+        np.zeros((config.SAMPLES_PER_EPOCH,len(config.CHANNELS)), dtype=np.float64),
+        np.zeros((config.SAMPLES_PER_EPOCH,len(config.CHANNELS)), dtype=np.float64),
+        np.zeros((config.SAMPLES_PER_EPOCH,len(config.CHANNELS)), dtype=np.float64),
+        np.zeros((config.SAMPLES_PER_EPOCH,len(config.CHANNELS)), dtype=np.float64),
+        np.zeros((config.SAMPLES_PER_EPOCH,len(config.CHANNELS)), dtype=np.float64),
+        np.zeros((config.SAMPLES_PER_EPOCH,len(config.CHANNELS)), dtype=np.float64)]
 
     for index in range(len(epoch_data)):
         for ep in epoch_data[index]:
@@ -171,44 +127,28 @@ def average_epoch_data(epoch_data):
 
 def get_p300_prediction(clf, average_data):
     """Makes a prediction on a row/column index given a classifier and list of sample data matrices"""
-    best_prediction = {"index": 0, "confidence": -0.1}
+    best_prediction = {"index": 0, "confidence": 0.0}
     for index in range(len(average_data)):
         data = down_sample_data(average_data[index], config.SAMPLING_RATE, target_sample_rate=128)
         data = np.ravel(data)
         predicted_class = clf.predict(np.reshape(data,(1, -1)))
         prediction_confidence = clf.decision_function(np.reshape(data,(1, -1)))
+        print "Row/Col: %d" % index
+        print "Class: "
+        print predicted_class
+        print "Confidence:"
+        print prediction_confidence
         if predicted_class[0] == 1 and prediction_confidence[0] > best_prediction["confidence"]:
             best_prediction["index"] = index
-            best_prediction["confidence"] = prediction_confidence
+            best_prediction["confidence"] = prediction_confidence[0]
     return best_prediction["index"]
 
-def create_example_cases(average_data, p300_index):
-    """
-    Given a list of averaged epoch data matrices and a p300 index,
-    outputs a set of example cases and classifications
-    """
-    samples_to_skip = int(math.ceil(float(config.SAMPLING_RATE) / 128))
-    num_samples_possible = config.SAMPLING_RATE / samples_to_skip
-    
-    X = np.zeros((0, num_samples_possible * len(config.CHANNELS)))
-    y = np.array([])
 
-    for index in range(len(average_data)):
-        data = down_sample_data(average_data[index], config.SAMPLING_RATE, target_sample_rate=128)
-        data = np.ravel(data)
-        X = np.vstack((X, data))
-        if index == p300_index:
-            y = np.append(y, 1)
-        else:
-            y = np.append(y, 0)
-    
-    return X, y
     
 def run_gui(row_epoch_queue, col_epoch_queue, pipe_conn, is_training):
     """Starts the p300 speller gui"""
     root = tk.Tk()
     root.title("P300 Speller")
-    #root.geometry('%sx%s'%(config.WINDOW_WIDTH, config.WINDOW_HEIGHT))
     root.protocol("WM_DELETE_WINDOW", root.quit)
     speller_gui = gui.P300GUI(root,
                             row_epoch_queue,
@@ -306,8 +246,8 @@ if __name__ == '__main__':
     #==========================================================#
     
     # Sets up path for outputing the raw data    
-    OUTPUT_DIR = DIR_PATH + PATH_DELIM + str(config.CSV_DIRECTORY) + PATH_DELIM + datetime.datetime.now().strftime("%I-%M-%S%p%B_%d_%Y") + PATH_DELIM
-    RAW_DATA_FILENAME = datetime.datetime.now().strftime("%I-%M-%S%p%B_%d_%Y") + "RawData.csv"
+    OUTPUT_DIR = DIR_PATH + PATH_DELIM + str(config.CSV_DIRECTORY) + PATH_DELIM + datetime.datetime.now().strftime("%B_%d_%Y@%I-%M-%S%p") + PATH_DELIM
+    RAW_DATA_FILENAME = datetime.datetime.now().strftime("%B_%d_%Y@%I-%M-%S%p") + "RawData.csv"
     
     if not os.path.exists(OUTPUT_DIR):
         if args.verbose:
@@ -328,6 +268,9 @@ if __name__ == '__main__':
 
     # 2D numpy array of sample data [[read_time,c1,c2,...cn],...]
     data_history = np.zeros((0,1 + len(config.CHANNELS)), dtype=np.float64)
+
+    # List of times of all the epochs in the current trial
+    epoch_times = []
 
     # Lists of Epochs that have been collected over a trial
     row_epochs = [[], [], [], [], [], []]
@@ -351,14 +294,6 @@ if __name__ == '__main__':
                     np.zeros((SAMPLES_PER_EPOCH,len(config.CHANNELS)), dtype=np.float64)]
 
     
-    samples_to_skip = int(math.ceil(float(config.SAMPLING_RATE) / 128))
-    num_samples_possible = config.SAMPLING_RATE / samples_to_skip
-    
-    X = np.zeros((0, num_samples_possible * len(config.CHANNELS)))
-
-    # Holds all of the example classifications
-    y = np.array([])
-    
     #==========================================================#
     #                    Spawn GUI Process                     #
     #==========================================================#
@@ -371,8 +306,6 @@ if __name__ == '__main__':
     #==========================================================#
     #        Connect to LSL Stream or Simulation Data          #
     #==========================================================#
-
-    app_start_time = pylsl.local_clock()
 
     if not args.gui_only and (args.live_mode or args.training_mode):
         # Look for the stream of EEG data on the network
@@ -425,6 +358,7 @@ if __name__ == '__main__':
             if row_epochs_read < 6:
                 epoch = row_epoch_queue.get_nowait()
                 if epoch:
+                    epoch_times.append(epoch.start_time)
                     row_epochs[epoch.index].append(epoch)
                     row_epochs_read += 1
                     if first_epoch == None or epoch.start_time < first_epoch.start_time:
@@ -435,6 +369,7 @@ if __name__ == '__main__':
             if col_epochs_read < 6:
                 epoch = col_epoch_queue.get_nowait()
                 if epoch:
+                    epoch_times.append(epoch.start_time)
                     col_epochs[epoch.index].append(epoch)
                     col_epochs_read += 1
                     if first_epoch == None or epoch.start_time < first_epoch.start_time:
@@ -522,7 +457,7 @@ if __name__ == '__main__':
 
                 if args.output_raw:
                     # Write the contents of the
-                    write_raw_to_csv(data_history, app_start_time, OUTPUT_DIR + RAW_DATA_FILENAME)
+                    write_raw_to_csv(data_history, epoch_times, OUTPUT_DIR + RAW_DATA_FILENAME)
                     if args.verbose:
                             print "Wrote raw data to \'%s\' in the output directory." % (RAW_DATA_FILENAME)
                     
@@ -581,8 +516,10 @@ if __name__ == '__main__':
                     if np.shape(ep.sample_data)[0] != SAMPLES_PER_EPOCH:
                         col.remove(ep)
             
-            # Clear all data up to the start_time of last epoch
+            # Clear all sample data up to the start_time of last epoch
             data_history = np.zeros((0,1 + len(config.CHANNELS)), dtype=np.float64)
+            # Clear all epoch times
+            epoch_times.clear()
             if args.verbose:
                 print "Data history has been cleared for next trial."
 
@@ -590,17 +527,15 @@ if __name__ == '__main__':
             #                Averaging Together Epochs                 #
             #==========================================================#
 
-            if args.verbose:
-                print "Averaging the epochs for each row/column"
-
-            row_averages = average_epoch_data(row_epochs)
-            col_averages = average_epoch_data(col_epochs)
-
-
             if not args.gui_only:
+
+                if args.verbose:
+                    print "Averaging the epochs for each row/column"
+                row_averages = average_epoch_data(row_epochs)
+                col_averages = average_epoch_data(col_epochs)
+
                 if args.verbose:
                     print "Outputing epoch averages for this trial"
-
                 output_epoch_average_list(row_averages, OUTPUT_DIR, "Col", trials_complete, p300_col)
                 output_epoch_average_list(col_averages, OUTPUT_DIR, "Row", trials_complete, p300_row)
                 
@@ -610,13 +545,13 @@ if __name__ == '__main__':
                     output_rc_epochs(row_epochs, directory=OUTPUT_DIR)
                     output_rc_epochs(col_epochs, directory=OUTPUT_DIR)
             
-            if args.verbose:
-                print "Clearing epoch data"
-            row_epochs = [[], [], [], [], [], []]
-            col_epochs = [[], [], [], [], [], []]
+                if args.verbose:
+                    print "Clearing epoch data"
+                row_epochs = [[], [], [], [], [], []]
+                col_epochs = [[], [], [], [], [], []]
 
             #==========================================================#
-            #         Classification or Storage for Training           #
+            #                     Classification                       #
             #==========================================================#
             if not args.gui_only and args.live_mode:
 
@@ -631,16 +566,6 @@ if __name__ == '__main__':
                     
                 main_conn.send(["prediction", "row", predicted_row])
                 main_conn.send(["prediction", "col", predicted_col])
-
-            else:
-
-                row_example_cases, row_example_classes = create_example_cases(row_averages, p300_row)
-                X = np.vstack((X, row_example_cases))
-                y = np.append(y, row_example_classes)
-
-                col_example_cases, col_example_classes = create_example_cases(col_averages, p300_col)
-                X = np.vstack((X, col_example_cases))
-                y = np.append(y, col_example_classes)
 
             #==========================================================#
             #                 Prep for the Next Trial                  #

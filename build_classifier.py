@@ -47,6 +47,26 @@ def down_sample_data(data, current_sample_rate, target_sample_rate=128):
     return resampled_data
 
 
+def create_example_cases(average_data, p300_index):
+    """
+    Given a list of averaged epoch data matrices and index indicating the
+    row/col of the expected P300, outputs a set of example cases and classifications
+    """
+    X = np.zeros((0, config.MAX_NUM_SAMPLES_POSSIBLE * len(config.CHANNELS)))
+    y = np.array([])
+
+    for index in range(len(average_data)):
+        data = down_sample_data(average_data[index], config.SAMPLING_RATE, target_sample_rate=config.DOWN_SAMPLE_TARGET)
+        data = np.ravel(data)
+        X = np.vstack((X, data))
+        if index == p300_index:
+            y = np.append(y, 1)
+        else:
+            y = np.append(y, 0)
+    
+    return X, y
+
+
 def get_example_case(filepath):
     """Returns a 2D-numpy array of the sample data from a given file"""
     data = np.zeros((0, len(config.CHANNELS)))
@@ -92,29 +112,26 @@ if __name__ == '__main__':
     # Holds all of the example classifications
     y = np.array([])
 
-    # For all files in the directory, open, read and generate test set
+    
 
     data_filenames = os.listdir(directory)
 
+    # Generate example set from all of the files in the directory
     for name in sorted(data_filenames):
         example_data, example_class = get_example_case(directory + name)
         if example_class != -1:
             X = np.vstack((X, example_data))
             y = np.append(y, example_class)
     
-    print np.shape(X)
-    print np.shape(y)
 
-    # Rescale X
-    X_scaled = preprocessing.scale(X)
-    X = X_scaled
+    # Feature scale X
+    X= preprocessing.scale(X)
 
-    
     classifier = svm.SVC(kernel='linear')
     print "Training Linear classifier."
     classifier.fit(X,y)
-    scores = cross_val_score(classifier, X, y, cv=10)
     print "Done."
+    scores = cross_val_score(classifier, X, y, cv=10)
     print "Accuracy: %0.2f (+/- %0.2f)" % (scores.mean(), scores.std() * 2)
 
     outfile = open(config.CLASSIFIER_FILENAME, 'wb')
@@ -122,20 +139,4 @@ if __name__ == '__main__':
     outfile.close()
     
     print "Exported classifier to: %s" % config.CLASSIFIER_FILENAME
-
-    """
-    classifier = svm.SVC(kernel='poly', degree=3, C=1.0)
-    print "Training Quadratic classifier."
-    classifier.fit(X,y)
-    scores = cross_val_score(classifier, X, y, cv=10)
-    print "Done."
-    print "Accuracy: %0.2f (+/- %0.2f)" % (scores.mean(), scores.std() * 2)
-    
-    classifier = svm.SVC()
-    print "Training RBF classifier."
-    classifier.fit(X,y)
-    scores = cross_val_score(classifier, X, y, cv=10)
-    print "Done."
-    print "Accuracy: %0.2f (+/- %0.2f)" % (scores.mean(), scores.std() * 2)
-    """
     

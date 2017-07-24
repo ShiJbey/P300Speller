@@ -2,7 +2,7 @@ import time
 import random
 import Tkinter as tk
 import pylsl
-from p300_speller import Epoch
+from epoch import Epoch
 import config
 
 class SelectionRectangle():
@@ -18,7 +18,15 @@ class SelectionRectangle():
         self.max_y = max_y          # Max y-position that the rectangle may occupy
         self.remaining_rows = range(6)  # List of possible rows for the rect to move to
         self.remaining_cols = range(6)  # List of possible columns for the rect to move to
-        self.visible = True         # Is the rectangle currently made visible on the screen 
+        self.visible = True         # Is the rectangle currently made visible on the screen
+
+    
+    def get_index(self):
+        """Return the current row or column index of the rectangle"""
+        if self.is_vertical():
+            return int(self.x / self.width)
+        else:
+            return int(self.y / self.length)
 
     def move_to_col(self, index, reset_top=True):
         """Moves and re-orients the rectangle to a column specified by an index"""
@@ -123,14 +131,6 @@ class SelectionRectangle():
                 if self.y + self.length > self.max_y:
                     self.y = 0
                     self.rotate90()
-                    
-        
-    def get_index(self):
-        """Return the current row or column index of the rectangle"""
-        if self.is_vertical():
-            return int(self.x / self.width)
-        else:
-            return int(self.y / self.length)
     
     def draw(self, canvas):
         """Draws the rectange to a Tkinter canvas"""
@@ -151,7 +151,7 @@ class StartScreen(tk.Frame):
     def __init__(self, master, next_screen):
         tk.Frame.__init__(self, master)
         # Add title text
-        self.title_text = tk.Label(self, text="P300 Speller (WIP)", font=("Arial", 24))
+        self.title_text = tk.Label(self, text="P300 Speller", font=("Arial", 24))
         self.title_text.grid(row=0,)
         # Add start button
         self.start_button = tk.Button(self, command=self.start_speller, text='Start', font=("Arial", 24, "bold"), height=4, width=24)
@@ -206,7 +206,7 @@ class P300GUI(tk.Frame):
                                 color=config.CHAR_SELECT_COLOR,
                                 max_x=config.GRID_WIDTH,
                                 max_y=config.GRID_WIDTH) 
-        self.create_widgets()                       # Populate the screen  
+        self.create_widgets()                       
         
         
     def display_screen(self):
@@ -226,8 +226,6 @@ class P300GUI(tk.Frame):
     
     def training_update(self):
         """Updates the gui while in training mode"""
-        # Manages the current state of the training
-
         
         # Highlight the character when we are currently not in the middle of a trial
         if not self.trial_in_progress and self.epochs_made == 0:
@@ -335,7 +333,6 @@ class P300GUI(tk.Frame):
                     print "Predicted Row: %d, Predicted Col: %d" % (self.predicted_row, self.predicted_col)
                     predicted_char = self.get_character(self.predicted_row, self.predicted_col)
                     self.add_char(predicted_char)
-                print "Starting sequence %d" % self.sequence_count
                 self.master.after(config.EPOCH_LENGTH * 1000 + self.intermediate_time, self.update)
             else:
                 # Keep the rect invisible for a set amount of time

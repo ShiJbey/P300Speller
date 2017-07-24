@@ -1,3 +1,5 @@
+import math
+
 #======================================================#
 #               DATA/TRAINING SETTINGS                 #
 #======================================================#
@@ -5,22 +7,30 @@
 # Length of an EEG epoch in seconds
 EPOCH_LENGTH = 1
 # How many letters are used in training
-NUM_TRIALS = 3
+NUM_TRIALS = 12
 # How any flashes of all rows and columns, sequence, per trial
-SEQ_PER_TRIAL = 3
+SEQ_PER_TRIAL = 15
 # Sampling rate of the headset in Hz (2000Hz BioSemi (speed 4)) (250Hz OpenBCI)
 SAMPLING_RATE = 250
 # What channels are we using in analysis (specify indices)
-CHANNELS = [0, 1, 2, 3, 4, 5, 6, 7]
+CHANNELS = [2, 3, 4, 5, 6, 7]
 # File path to the pickle file containing the trained classifiers
-CLASSIFIER_FILENAME = "p300_classifier.pkl"
+CLASSIFIER_FILENAME = 'p300_classifier.pkl'
+# Number of samples that should be in each epoch
+SAMPLES_PER_EPOCH = EPOCH_LENGTH * SAMPLING_RATE
+# Sampling rate to down sample data to
+DOWN_SAMPLE_TARGET = 128
+# Samples in the raw data to skip in order to get desired sample rate
+SAMPLES_TO_SKIP = int(math.ceil(float(SAMPLING_RATE) / DOWN_SAMPLE_TARGET))
+# Max number of samples an epoch may have after down sampling
+MAX_NUM_SAMPLES_POSSIBLE = (SAMPLING_RATE * EPOCH_LENGTH) / SAMPLES_TO_SKIP
 
 #======================================================#
 #                    DATA FILTERING                    #
 #======================================================#
 
 # Option to use filter
-FILTER_DATA = True
+FILTER_DATA = False
 # Low cut-off frequency value (Hz)s
 FILTER_LOWCUT = .1
 # High cut-off frequency value (Hz)
