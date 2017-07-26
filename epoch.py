@@ -1,3 +1,7 @@
+"""
+Epoch objects are resposnsible for segmenting time-chunks
+of EEG data that have been collected
+"""
 import numpy as np
 import config
 
@@ -10,7 +14,7 @@ class Epoch(object):
         self.index = index              # Row/Col index of this epoch
         self.start_time = start_time    # Starting time of this epoch
         self.sample_data = None         # Numpy 2D array of sample data (sample X channel)
-        self.is_p300 = is_p300          # Set to true if there is supposed to be P300 (used in training)
+        self.is_p300 = is_p300      # Set to true if there is supposed to be P300 (used in training)
 
     def is_within_epoch(self, sample_time):
         """Returns true if the given time is within this given epoch"""
@@ -34,7 +38,7 @@ class Epoch(object):
                 out_file.write(", 1\n")
             else:
                 out_file.write(", 0\n")
-            
+
             # All following lines are organized one sample per
             # row and each column is a different channel
             for sample in self.sample_data:
@@ -51,13 +55,12 @@ class Epoch(object):
         index_of_first_sample = -1
 
         for sample_index in range(len(data_hist)):
-            if data_hist[sample_index,0] <= self.start_time:
+            if data_hist[sample_index, 0] <= self.start_time:
                 index_of_first_sample = sample_index
-            elif data_hist[sample_index,0] > self.start_time:
+            elif data_hist[sample_index, 0] > self.start_time:
                 if index_of_first_sample == -1:
                     index_of_first_sample = sample_index
                     break
-        
+
         self.sample_data = np.array(data_hist[
-                                        index_of_first_sample:index_of_first_sample + SAMPLES_PER_EPOCH,1:],
-                                    dtype=np.float64)
+            index_of_first_sample:index_of_first_sample + config.SAMPLES_PER_EPOCH, 1:])
