@@ -10,3 +10,4 @@ test.py
 *.mat
 *.pkl
 plot_classifier.py
+4shi.py
