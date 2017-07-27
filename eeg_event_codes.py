@@ -38,6 +38,11 @@ P300_COL3 = 27
 P300_COL4 = 28
 P300_COL5 = 29
 
+# Masks used in analyzing bits
+INDEX_MASK = 7
+ORIENTATION_MASK = 8
+P300_MASK = 16
+
 class InvalidEventCodeException(Exception):
     """Raised whenever an invalid event code is used"""
     pass
@@ -47,25 +52,26 @@ def decode_event(event_code):
     Given an event code, returns a tuple indicating 'row' or 'col'
     and the coresponding index
     """
-    index_mask = 7
-    index = event_code & index_mask
+
+    index = get_code_index(event_code)
+    orientation = get_code_orientation(event_code)
+    is_p300 = is_code_p300(event_code)
 
     if index >= 0 and index <= 5:
-        if event_code >> 3 == 1:
-            return (event_code >> 4 == 1, 'col', index)
-        elif event_code >> 3 == 0:
-            return (event_code >> 4 == 1, 'row', index)
+        if orientation == 1:
+            return 'col', index, is_p300
         else:
-            raise InvalidEventCodeException()
+            return 'row', index, is_p300
     else:
         raise InvalidEventCodeException()
 
-def get_event_code(orientation, index, is_p300=False):
+def encode_event(orientation, index, is_p300=False):
     """
     Given an orientation ('row' or 'col') and an index
     returns the coresponding event code
     """
     if index < 0 or index > 5:
+        print "Something is wriong with index"
         raise InvalidEventCodeException()
 
     if orientation == 'row':
@@ -73,5 +79,27 @@ def get_event_code(orientation, index, is_p300=False):
     elif orientation == 'col':
         return (int(is_p300) << 4) + index
     else:
+        print "Something is wriong with orientation"
         raise InvalidEventCodeException()
-        
+    
+
+def get_code_index(event_code):
+    """
+    Retuns the ondex for this code
+    """
+    return event_code & INDEX_MASK
+
+def get_code_orientation(event_code):
+    """
+    Returns if this code is for a row or column
+    """
+    if (event_code & ORIENTATION_MASK) >> 3 == 1:
+        return 'col'
+    else:
+        return 'row'
+
+def is_code_p300(event_code):
+    """
+    Returns true if this code is a P300 code
+    """
+    return (event_code & P300_MASK) >> 4 == 1

@@ -5,6 +5,20 @@ import pylsl
 from epoch import Epoch
 import config
 
+def run_gui(row_epoch_queue, col_epoch_queue, pipe_conn, is_training):
+    """Starts the p300 speller gui"""
+    root = tk.Tk()
+    root.title("P300 Speller")
+    root.protocol("WM_DELETE_WINDOW", root.quit)
+    speller_gui = P300GUI(root,
+                            row_epoch_queue,
+                            col_epoch_queue,
+                            pipe_conn,
+                            is_training)
+    start_screen = StartScreen(root, speller_gui)
+    start_screen.display_screen()
+    root.mainloop()
+
 class SelectionRectangle():
     """Manages the rectangle that highlights the characters in the grid"""
     def __init__(self, x, y, length, width, max_x, max_y, color="#ffffff"):

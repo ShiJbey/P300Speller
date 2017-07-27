@@ -12,9 +12,8 @@ import Tkinter as tk
 import numpy as np
 from sklearn import svm
 # Custom modules
-from epoch import Epoch
+from epoch import *
 from butter_filters import butter_bandpass_filter, butter_highpass_filter, butter_lowpass_filter
-import speller_gui as gui
 from build_classifier import *
 from eeg_event_codes import *
 import config
@@ -64,13 +63,13 @@ def write_raw_to_csv(data_hist, epoch_times, file_path, delim=","):
                     if len(epoch_times) > 0:
                         closest_time = get_closest_epoch_time(sample_time, epoch_times)
                         if closest_time == -1:
-                            csv_row += str(repr(0))
+                            csv_row += str(repr(-1))
                             csv_row += delim
                         else:
-                            csv_row += str(repr(closest_time[0])) + "-" + closest_time[1][0] + "-" + str(repr(closest_time[2]))
+                            csv_row += str(closest_time[1]) # Write out the event code
                             csv_row += delim
                     else:
-                        csv_row += str(repr(0))
+                        csv_row += str(repr(-1))
                         csv_row += delim 
                 else:
                     channel_voltage = sample[index]
@@ -80,14 +79,20 @@ def write_raw_to_csv(data_hist, epoch_times, file_path, delim=","):
             csv_row += "\n"
             out_file.write(csv_row)
 
-def output_individual_epoch_list(rc_data, directory=config.CSV_DIRECTORY):
+def trim_data_history(data_history, start_time, end_time, num_channels=len(config.CHANNELS)):
     """
-    Outputs a dictionary of epochs to csv files
+    Returns a matrix of data exluding any samples that fell
+    outside of the time interval
     """
-    for rc in rc_data:
-        for epoch_index in range(len(rc)):
-            epoch = rc[epoch_index]
-            epoch.output_to_csv(epoch_index, directory=directory)
+    trimmed_history = np.zeros((0,1 + num_channels), dtype=np.float64)
+    
+    for row_index in range(len(data_history)):
+        sample = data_history[row_index, :]
+        sample_time = sample[0] 
+        if sample_time >= start_time and sample_time <= end_time:
+            trimmed_history = np.vstack((trimmed_history, sample))
+    
+    return trimmed_history
 
 def output_averaged_epoch_list(avg_list, file_path, name_root, trial_num, p300_index):
     """
@@ -128,40 +133,14 @@ def get_desired_channels(sample, index_list):
             new_sample.append(sample[i])
     return new_sample
 
-def average_epoch_list(epoch_list):
+
+def get_p300_prediction(clf, average_data, sampling_rate=config.SAMPLING_RATE):
     """
-    Given a list of Epochs, returns 2D numpy
-    of the averaged sample data
+    Makes a prediction on a row/column index given a classifier and list of sample data matrices
     """
-    average_data = np.zeros((config.SAMPLES_PER_EPOCH, len(config.CHANNELS)), dtype=np.float64)
-
-    for epoch in epoch_list:
-        data = epoch.sample_data
-        for sample_num in range(len(data)):
-            average_data[sample_num, :] = average_data[sample_num, :] + data[sample_num, :]
-
-    average_data = average_data / len(epoch_list)
-
-    return average_data
-
-def average_epoch_matrix(epoch_matrix):
-    """
-    Given a list of lists (matrix) of Epochs
-    returns a list of numpy 2D arrays of the average
-    epoch data for each row/col
-    """
-    average_data_list = []
-
-    for epoch_list in epoch_matrix:
-        average_data.append(average_epoch_list(epoch_list))
-
-    return average_data_list
-
-def get_p300_prediction(clf, average_data):
-    """Makes a prediction on a row/column index given a classifier and list of sample data matrices"""
     best_prediction = {"index": 0, "confidence": 0.0}
     for index in range(len(average_data)):
-        data = down_sample_data(average_data[index], config.SAMPLING_RATE, target_sample_rate=128)
+        data = down_sample_data(average_data[index], sampling_rate, target_sample_rate=128)
         data = np.ravel(data)
         predicted_class = clf.predict(np.reshape(data,(1, -1)))
         prediction_confidence = clf.decision_function(np.reshape(data,(1, -1)))
@@ -175,28 +154,9 @@ def get_p300_prediction(clf, average_data):
             best_prediction["confidence"] = prediction_confidence[0]
     return best_prediction["index"]
 
-
-    
-def run_gui(row_epoch_queue, col_epoch_queue, pipe_conn, is_training):
-    """Starts the p300 speller gui"""
-    root = tk.Tk()
-    root.title("P300 Speller")
-    root.protocol("WM_DELETE_WINDOW", root.quit)
-    speller_gui = gui.P300GUI(root,
-                            row_epoch_queue,
-                            col_epoch_queue,
-                            pipe_conn,
-                            is_training)
-    start_screen = gui.StartScreen(root, speller_gui)
-    start_screen.display_screen()
-    root.mainloop()
-
-
-
 if __name__ == '__main__':
-
+    import speller_gui as gui
     from pylsl import StreamInlet, resolve_stream
-    import pylsl
     import argparse
 
     #==========================================================#
@@ -324,7 +284,7 @@ if __name__ == '__main__':
     #==========================================================#
     
     # Create processes for the GUI and the EEG collection
-    gui_process = Process(target=run_gui, args=(row_epoch_queue, col_epoch_queue, gui_conn, args.training_mode))
+    gui_process = Process(target=gui.run_gui, args=(row_epoch_queue, col_epoch_queue, gui_conn, args.training_mode))
     # Start the GUI process
     gui_process.start()
 
@@ -378,7 +338,7 @@ if __name__ == '__main__':
             if row_epochs_read < 6:
                 epoch = row_epoch_queue.get_nowait()
                 if epoch:
-                    epoch_times.append((epoch.start_time, "row", epoch.index))
+                    epoch_times.append((epoch.start_time, epoch.get_event_code()))
                     row_epochs[epoch.index].append(epoch)
                     row_epochs_read += 1
                     if first_epoch == None or epoch.start_time < first_epoch.start_time:
@@ -389,7 +349,7 @@ if __name__ == '__main__':
             if col_epochs_read < 6:
                 epoch = col_epoch_queue.get_nowait()
                 if epoch:
-                    epoch_times.append((epoch.start_time, "col", epoch.index))
+                    epoch_times.append((epoch.start_time, epoch.get_event_code()))
                     col_epochs[epoch.index].append(epoch)
                     col_epochs_read += 1
                     if first_epoch == None or epoch.start_time < first_epoch.start_time:
@@ -429,7 +389,7 @@ if __name__ == '__main__':
         # Trial complete
         if sequences_complete >= config.SEQ_PER_TRIAL:
             trials_complete += 1
-
+            print "Trial over!"
             #==========================================================#
             #                Obtaining Remaining Data                  #
             #==========================================================#
@@ -461,10 +421,7 @@ if __name__ == '__main__':
                             print "Wrote raw data to \'%s\' in the output directory." % (RAW_DATA_FILENAME)
                     
                 # Erase any samples that fall outside of this sequence
-                for row_index in range(len(data_history)):
-                    t = data_history[row_index, 0] 
-                    if t < first_epoch.start_time or t > last_epoch.start_time + config.EPOCH_LENGTH + .5:
-                        data_history = np.delete(data_history, row_index, 0)
+                data_history = trim_data_history(data_history, first_epoch.start_time, last_epoch.start_time + config.EPOCH_LENGTH + .5)
             
             #==========================================================#
             #                     Filtering Data                       #
@@ -500,29 +457,26 @@ if __name__ == '__main__':
             # Fill and move epochs
             if args.verbose:
                 print "Splitting into epochs."
+            
             for row in row_epochs:
                 for ep in row:
-                    ep.get_epoch_data(data_history)
+                    ep.get_epoch_data(data_history, config.SAMPLES_PER_EPOCH)
             for col in col_epochs:
                 for ep in col:
-                    ep.get_epoch_data(data_history)
+                    ep.get_epoch_data(data_history, config.SAMPLES_PER_EPOCH)
             if args.verbose:
                 print "Done splitting."
 
             # Remove any epochs that do not have the desired samples
             if args.verbose:
                 print "Rejecting any epochs that dont have the desired number of samples"
-            for row in row_epochs:
-                for ep in row:
-                    if np.shape(ep.sample_data)[0] != config.SAMPLES_PER_EPOCH:
-                        row.remove(ep)
-            for col in col_epochs:
-                for ep in col:
-                    if np.shape(ep.sample_data)[0] != config.SAMPLES_PER_EPOCH:
-                        col.remove(ep)
+            row_epochs = reject_epochs_from_matrix(row_epochs, samples_per_epoch=config.SAMPLES_PER_EPOCH)
+            col_epochs = reject_epochs_from_matrix(col_epochs, samples_per_epoch=config.SAMPLES_PER_EPOCH)
             
+
             # Clear all sample data up to the start_time of last epoch
             data_history = np.zeros((0,1 + len(config.CHANNELS)), dtype=np.float64)
+
             # Clear all epoch times
             epoch_times = []
             if args.verbose:
@@ -536,8 +490,8 @@ if __name__ == '__main__':
 
                 if args.verbose:
                     print "Averaging the epochs for each row/column"
-                row_averages = average_epoch_data(row_epochs)
-                col_averages = average_epoch_data(col_epochs)
+                row_averages = average_epoch_matrix(row_epochs, config.SAMPLES_PER_EPOCH, len(config.CHANNELS))
+                col_averages = average_epoch_matrix(col_epochs, config.SAMPLES_PER_EPOCH, len(config.CHANNELS))
 
                 if args.verbose:
                     print "Outputing epoch averages for this trial"
@@ -547,8 +501,8 @@ if __name__ == '__main__':
                 if args.output_epochs:
                     if args.verbose:
                         print "Outputing regular epoch for this trial"
-                    output_individual_epoch_list(row_epochs, directory=OUTPUT_DIR)
-                    output_individual_epoch_list(col_epochs, directory=OUTPUT_DIR)
+                    output_epoch_matrix(row_epochs, directory=OUTPUT_DIR)
+                    output_epoch_matrix(col_epochs, directory=OUTPUT_DIR)
             
                 if args.verbose:
                     print "Clearing epoch data"
