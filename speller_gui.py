@@ -1,6 +1,7 @@
 import time
 import random
 import Tkinter as tk
+from Tkinter import *
 import pylsl
 from epoch import Epoch
 import config
@@ -10,6 +11,8 @@ def run_gui(row_epoch_queue, col_epoch_queue, pipe_conn, is_training):
     root = tk.Tk()
     root.title("P300 Speller")
     root.protocol("WM_DELETE_WINDOW", root.quit)
+    root.geometry('{}x{}'.format(config.GRID_WIDTH + 200, config.GRID_WIDTH + 200))
+    root.resizable(width=False, height=False)
     speller_gui = P300GUI(root,
                             row_epoch_queue,
                             col_epoch_queue,
@@ -160,26 +163,55 @@ class SelectionRectangle():
                                                         fill=self.color)
 
 
+TRAINING_INSTRUCTIONS = ("1) A character will be highlighted at the\n"
+                        "beginning of each trial\n\n"
+                        "2) Fixate on the character\n\n"
+                        "3) Rows and columns will begin to flash\n\n"
+                        "3) Continue to fixate on the character until\n"
+                        "another character is highlighted\n")
+
+LIVE_INSTRUCTIONS = ("1) Fixate on the character you wish to select\n\n"
+                    "2) A character will be predicted and types after\n"
+                    "a set amount of rounds\n")
+
+
 class StartScreen(tk.Frame):
     """Starting screen for the application"""
     def __init__(self, master, next_screen):
         tk.Frame.__init__(self, master)
         # Add title text
         self.title_text = tk.Label(self, text="P300 Speller", font=("Arial", 24))
-        self.title_text.grid(row=0,)
+        self.title_text.grid()
+
+        self.directions_label = tk.Label(self, text="Directions:", font=("Arial", 18))
+        self.directions_label.grid(sticky=tk.W)
+
+        self.training_label = tk.Label(self, text="Training:", font=("Arial", 16))
+        self.training_label.grid(sticky=tk.W)
+
+        self.training_text = tk.Label(self, text=TRAINING_INSTRUCTIONS, font=("Arial", 14), justify=LEFT)
+        self.training_text.grid(sticky=tk.W)
+
+        self.live_label = tk.Label(self, text="Live Spelling:", font=("Arial", 16))
+        self.live_label.grid(sticky=tk.W)
+
+        self.live_text = tk.Label(self, text=LIVE_INSTRUCTIONS, font=("Arial", 14), justify=LEFT)
+        self.live_text.grid(sticky=tk.W)
+
         # Add start button
         self.start_button = tk.Button(self, command=self.start_speller, text='Start', font=("Arial", 24, "bold"), height=4, width=24)
-        self.start_button.grid(row=2,pady=3, sticky=tk.W+tk.E)
+        self.start_button.grid(pady=3, sticky=tk.W+tk.E)
+
         # Screen that comes after this screen
         self.next_screen = next_screen
     
     def display_screen(self):
         """Adds this screen to the window"""
-        self.grid(padx=30,pady=30)
+        self.place(relx=0.5, rely=0.5, anchor=CENTER)
     
     def remove_screen(self):
         """Removes this screen from the window"""
-        self.grid_remove()
+        self.place_forget()
 
     def start_speller(self):
         """Removes this frame and displays the grid of characters"""
@@ -225,14 +257,16 @@ class P300GUI(tk.Frame):
         
     def display_screen(self):
         """Adds this screen to the window"""
-        self.grid(padx=30,pady=30)
-    
+        #self.grid(padx=30,pady=30)
+        self.place(relx=0.5, rely=0.5, anchor=CENTER)
+
     def remove_screen(self):
         """Removes this screen from the window"""
         self.grid_remove()
 
     def update(self):
         """Updates the gui based on the mode the application is in"""
+        self.selection_rect.move_to_col(-2)
         if self.is_training:
             self.training_update()
         else:
@@ -357,7 +391,7 @@ class P300GUI(tk.Frame):
         if cell_num <= 25:
             return chr(65 + cell_num)
         else:
-            return cell_num - 26
+            return str(cell_num - 26)
         
     def draw(self):
         """Redraws the canvas"""
@@ -455,7 +489,7 @@ class P300GUI(tk.Frame):
         self["bg"] = '#001c33'
         # Displays the current text being typed
         
-        self.text_buffer.grid(row=0, sticky=tk.W+tk.E)
+        self.text_buffer.grid(row=0, pady=20, sticky=tk.W+tk.E)
         self.text_buffer["fg"] = '#ffffff'
         self.text_buffer["bg"] = '#000000'
         # Canvas for drawing the grid of characters and the rectangle

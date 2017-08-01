@@ -87,13 +87,13 @@ def get_code_index(event_code):
     """
     Retuns the ondex for this code
     """
-    return event_code & INDEX_MASK
+    return int(event_code) & INDEX_MASK
 
 def get_code_orientation(event_code):
     """
     Returns if this code is for a row or column
     """
-    if (event_code & ORIENTATION_MASK) >> 3 == 1:
+    if (int(event_code) & ORIENTATION_MASK) >> 3 == 1:
         return 'col'
     else:
         return 'row'
@@ -102,4 +102,4 @@ def is_code_p300(event_code):
     """
     Returns true if this code is a P300 code
     """
-    return (event_code & P300_MASK) >> 4 == 1
+    return (int(event_code) & P300_MASK) >> 4 == 1

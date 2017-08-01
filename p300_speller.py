@@ -23,14 +23,6 @@ PATH_DELIM = '/'
 if os.name == 'nt':
     PATH_DELIM = '\\'
 
-def apply_on_all(seq, method, *args, **kwargs):
-    """
-    Applies a method to all objects in the sequence
-    """
-    for obj in seq:
-        getattr(obj, method)(*args, **kwargs)
-
-
 def get_closest_epoch_time(target_time, epoch_times):
     """
     Returns the closest epoch start time to a given target time
@@ -78,6 +70,13 @@ def write_raw_to_csv(data_hist, epoch_times, file_path, delim=","):
             csv_row = csv_row[:-1]
             csv_row += "\n"
             out_file.write(csv_row)
+
+def get_code_time_pairs(time_code_matrix):
+    time_code_pairs = []
+    for index in range(len(time_code_matrix)):
+        if time_code_matrix[index,1] != 32:
+            time_code_pairs.append((time_code_matrix[index,0], time_code_matrix[index,1]))
+    return time_code_pairs
 
 def trim_data_history(data_history, start_time, end_time, num_channels=len(config.CHANNELS)):
     """
@@ -139,19 +138,21 @@ def get_p300_prediction(clf, average_data, sampling_rate=config.SAMPLING_RATE):
     Makes a prediction on a row/column index given a classifier and list of sample data matrices
     """
     best_prediction = {"index": 0, "confidence": 0.0}
+
     for index in range(len(average_data)):
         data = down_sample_data(average_data[index], sampling_rate, target_sample_rate=128)
         data = np.ravel(data)
         predicted_class = clf.predict(np.reshape(data,(1, -1)))
-        prediction_confidence = clf.decision_function(np.reshape(data,(1, -1)))
+        #prediction_confidence = clf.predict_proba(np.reshape(data,(1, -1)))[0][1]
+        prediction_confidence = clf.decision_function(np.reshape(data,(1, -1)))[0]
         print "Row/Col: %d" % index
         print "Class: "
         print predicted_class
         print "Confidence:"
         print prediction_confidence
-        if predicted_class[0] == 1 and prediction_confidence[0] > best_prediction["confidence"]:
-            best_prediction["index"] = index
-            best_prediction["confidence"] = prediction_confidence[0]
+        if predicted_class[0] == '1' and (prediction_confidence > best_prediction["confidence"]):
+            best_prediction["index"] = int(index)
+            best_prediction["confidence"] = prediction_confidence
     return best_prediction["index"]
 
 if __name__ == '__main__':
@@ -182,18 +183,25 @@ if __name__ == '__main__':
                         nargs=1,
                         default="",
                         help='Runs the speller using simulation data')
+    parser.add_argument('-c', '--classifier',
+                        dest='clf_path',
+                        type=str,
+                        nargs=1,
+                        default=None,
+                        help='Specifies a path for importing a classifier .pkl file')
     parser.add_argument('--gui-only',
                         dest="gui_only",
                         action='store_true',
                         default=False,
                         help='Only runs the gui in the live mode '
                         'without connecting to LSL data stream.')
-    parser.add_argument('--output_raw',
+    parser.add_argument('--output-raw',
                         dest="output_raw",
                         action='store_true',
+                        default=True,
                         help='Writes the raw data collected to a'
                         'CSV file to be used at a later time.')
-    parser.add_argument('--output_epochs',
+    parser.add_argument('--output-epochs',
                         dest="output_epochs",
                         action='store_true',
                         default=False,
@@ -222,13 +230,19 @@ if __name__ == '__main__':
     classifier = None
     # Exit application if no classifier '.pkl' file can be found
     if args.live_mode:
-        if os.path.exists(DIR_PATH + PATH_DELIM + str(config.CLASSIFIER_FILENAME)):
+        clf_import_path = ""
+        if args.clf_path:
+            clf_import_path = args.clf_path[0]
+        else:
+            clf_import_path = DIR_PATH + PATH_DELIM + str(config.CLASSIFIER_FILENAME)
+
+        if os.path.exists(clf_import_path):
             
             # Import the classifier
             if args.verbose:
                 print "Attempting to import classifier from pickle file..."
 
-            pkl_file = open(DIR_PATH + PATH_DELIM + str(config.CLASSIFIER_FILENAME), 'rb')
+            pkl_file = open(clf_import_path, 'rb')
             
             classifier = pickle.load(pkl_file)
 
@@ -237,7 +251,7 @@ if __name__ == '__main__':
             if args.verbose:
                 print "Classifier loaded from file."
         else:
-            raise IOError("No classifier file found at: " + DIR_PATH + PATH_DELIM + str(config.CLASSIFIER_FILENAME))
+            raise IOError("No classifier file found at: " + clf_import_path)
 
     #==========================================================#
     #              Set-up for Data Exporting                   #
@@ -389,7 +403,8 @@ if __name__ == '__main__':
         # Trial complete
         if sequences_complete >= config.SEQ_PER_TRIAL:
             trials_complete += 1
-            print "Trial over!"
+            if args.verbose:
+                print "Trial over!"
             #==========================================================#
             #                Obtaining Remaining Data                  #
             #==========================================================#
@@ -414,14 +429,14 @@ if __name__ == '__main__':
                         else:
                             break                  
 
-                if args.output_raw:
-                    # Write the contents of the
-                    write_raw_to_csv(data_history, epoch_times, OUTPUT_DIR + RAW_DATA_FILENAME)
-                    if args.verbose:
-                            print "Wrote raw data to \'%s\' in the output directory." % (RAW_DATA_FILENAME)
-                    
-                # Erase any samples that fall outside of this sequence
-                data_history = trim_data_history(data_history, first_epoch.start_time, last_epoch.start_time + config.EPOCH_LENGTH + .5)
+                    if args.output_raw:
+                        # Write the contents of the
+                        write_raw_to_csv(data_history, epoch_times, OUTPUT_DIR + RAW_DATA_FILENAME)
+                        if args.verbose:
+                                print "Wrote raw data to \'%s\' in the output directory." % (RAW_DATA_FILENAME)
+                        
+                    # Erase any samples that fall outside of this sequence
+                    data_history = trim_data_history(data_history, first_epoch.start_time, last_epoch.start_time + config.EPOCH_LENGTH + .5)
             
             #==========================================================#
             #                     Filtering Data                       #
@@ -434,10 +449,7 @@ if __name__ == '__main__':
                 # Replace each column in data_history with the filtered version
                 if len(data_history) > 0:
                     for column_index in range(len(data_history[0])):
-                        if column_index > 0:
-                            # Filter with lowpasss and high pass
-                            
-                            
+                        if column_index > 0:                            
                             data_history[:,column_index] = butter_highpass_filter(data_history[:,column_index],
                                                                                 config.HIGHPASS_CUTOFF,
                                                                                 config.SAMPLING_RATE,
@@ -447,8 +459,6 @@ if __name__ == '__main__':
                                                                                 config.LOWPASS_CUTOFF,
                                                                                 config.SAMPLING_RATE,
                                                                                 order=config.FILTER_ORDER)
-                                                                                
-                            data_history[:,column_index] = butter_bandpass_filter(data_history[:,column_index],config.HIGHPASS_CUTOFF, config.LOWPASS_CUTOFF, config.SAMPLING_RATE)
                             
             #==========================================================#
             #               Splitting Data into Epochs                 #
@@ -457,7 +467,6 @@ if __name__ == '__main__':
             # Fill and move epochs
             if args.verbose:
                 print "Splitting into epochs."
-            
             for row in row_epochs:
                 for ep in row:
                     ep.get_epoch_data(data_history, config.SAMPLES_PER_EPOCH)
@@ -493,10 +502,11 @@ if __name__ == '__main__':
                 row_averages = average_epoch_matrix(row_epochs, config.SAMPLES_PER_EPOCH, len(config.CHANNELS))
                 col_averages = average_epoch_matrix(col_epochs, config.SAMPLES_PER_EPOCH, len(config.CHANNELS))
 
-                if args.verbose:
-                    print "Outputing epoch averages for this trial"
-                output_averaged_epoch_list(row_averages, OUTPUT_DIR, "Col", trials_complete, p300_col)
-                output_averaged_epoch_list(col_averages, OUTPUT_DIR, "Row", trials_complete, p300_row)
+                if args.training_mode:
+                    if args.verbose:
+                        print "Outputing epoch averages for this trial"
+                    output_averaged_epoch_list(row_averages, OUTPUT_DIR, "Col", trials_complete, p300_col)
+                    output_averaged_epoch_list(col_averages, OUTPUT_DIR, "Row", trials_complete, p300_row)
                 
                 if args.output_epochs:
                     if args.verbose:
@@ -530,7 +540,7 @@ if __name__ == '__main__':
             #                 Prep for the Next Trial                  #
             #==========================================================#         
 
-            # Reset averagees to all zeros
+            # Reset averages to all zeros
             for i in range(6):
                 row_averages[i] = np.zeros((config.SAMPLES_PER_EPOCH,len(config.CHANNELS)))
                 col_averages[i] = np.zeros((config.SAMPLES_PER_EPOCH,len(config.CHANNELS)))

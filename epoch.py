@@ -12,7 +12,8 @@ def get_epochs_from_codes(code_time_pairs):
     """
     epochs = []
     for event in code_time_pairs:
-        epochs.append(Epoch.create_epoch_from_code(event[1], event[0]))
+        if event[1] != 32:
+            epochs.append(Epoch.create_epoch_from_code(int(event[1]), event[0]))
     return epochs
 
 def separate_epochs_by_orientation(epoch_list):
@@ -59,6 +60,7 @@ def get_epoch_matrix_data(epoch_matrix, data_history, samples_per_epoch):
     """
     Gets the epoch data for each epoch in the matrix
     """
+    print "Getting data"
     for matrix_row in epoch_matrix:
         for epoch in matrix_row:
             epoch.get_epoch_data(data_history, samples_per_epoch)
@@ -207,3 +209,4 @@ class Epoch(object):
 
         self.sample_data = np.array(data_hist[
             index_of_first_sample:index_of_first_sample + samples_per_epoch, 1:])
+

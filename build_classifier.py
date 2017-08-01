@@ -10,6 +10,7 @@ import pickle
 import numpy as np
 from sklearn import svm, preprocessing
 from sklearn.model_selection import cross_val_score
+from sklearn.ensemble import VotingClassifier
 import config
 sys.path.append('..')
 
@@ -57,7 +58,7 @@ def create_example_cases(average_data, p300_index):
 
     for index in range(len(average_data)):
         data = down_sample_data(average_data[index], config.SAMPLING_RATE, target_sample_rate=config.DOWN_SAMPLE_TARGET)
-        data = np.ravel(data)
+        data = np.ravel(average_data[index])
         X = np.vstack((X, data))
         if index == p300_index:
             y = np.append(y, 1)
@@ -81,7 +82,6 @@ def get_example_case(filepath):
                 row[i] = float(row[i])
                 
                 row = np.array(row)
-
             data = np.vstack((data, row))
 
     if len(data) < SAMPLES_PER_EPOCH:
@@ -125,14 +125,24 @@ if __name__ == '__main__':
     
 
     # Feature scale X
-    X= preprocessing.scale(X)
+    X = preprocessing.scale(X)
 
-    classifier = svm.SVC(kernel='linear')
-    print "Training Linear classifier."
-    classifier.fit(X,y)
+    print "Training Linear classifiers."
+    clf1 = svm.SVC(kernel='poly', degree=2, probability=True)
+    clf1 = clf1.fit(X,y)
+    """
+    clf2 = svm.SVC(kernel='poly', degree=2, probability=True)
+    clf3 = svm.SVC(probability=True)
+    eclf1 = VotingClassifier(estimators=[('lin', clf1), ('quad', clf2), ('rbf', clf3)], voting='soft')
+    eclf1 = eclf1.fit(X,y)
+    """
     print "Done."
+
+    classifier = clf1
+
     scores = cross_val_score(classifier, X, y, cv=10)
     print "Accuracy: %0.2f (+/- %0.2f)" % (scores.mean(), scores.std() * 2)
+
 
     outfile = open(config.CLASSIFIER_FILENAME, 'wb')
     pickle.dump(classifier, outfile)

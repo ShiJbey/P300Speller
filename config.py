@@ -11,13 +11,13 @@ import math
 # Length of an EEG epoch in seconds
 EPOCH_LENGTH = 1
 # How many letters are used in training
-NUM_TRIALS = 5
+NUM_TRIALS = 50
 # How any flashes of all rows and columns, sequence, per trial
-SEQ_PER_TRIAL = 3
+SEQ_PER_TRIAL = 5
 # Sampling rate of the headset in Hz (2000Hz BioSemi (speed 4)) (250Hz OpenBCI)
 SAMPLING_RATE = 250
 # What channels are we using in analysis (specify indices)
-CHANNELS = [0, 1, 3, 4, 5, 6, 7]
+CHANNELS = [0, 1, 2, 3, 4, 5]
 # File path to the pickle file containing the trained classifiers
 CLASSIFIER_FILENAME = 'p300_classifier.pkl'
 # Number of samples that should be in each epoch
@@ -34,13 +34,13 @@ MAX_NUM_SAMPLES_POSSIBLE = (SAMPLING_RATE * EPOCH_LENGTH) / SAMPLES_TO_SKIP
 #======================================================#
 
 # Option to use filter
-FILTER_DATA = False
+FILTER_DATA = True
 # Low cut-off frequency value (Hz)
 HIGHPASS_CUTOFF = .1
 # High cut-off frequency value (Hz)
-LOWPASS_CUTOFF = 30
+LOWPASS_CUTOFF = 60
 # Order of the filter
-FILTER_ORDER = 6
+FILTER_ORDER = 3
 
 #======================================================#
 #                   GUI SETTINGS                       #
@@ -51,7 +51,7 @@ GRID_WIDTH = 500
 # Time in miliseconds the rectangle remains over a given row/column
 HIGHLIGHT_TIME = 100
 # Time in miliseconds between rectangle presentions
-INTERMEDIATE_TIME = 80
+INTERMEDIATE_TIME = 75
 # Will the highlighting rectangle move randomly
 RANDOM_HIGHLIGHT = True
 # Colors of the characters in the grid
