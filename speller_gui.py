@@ -300,6 +300,7 @@ class P300GUI(tk.Frame):
             self.trial_in_progress = True
             self.draw()
             print "Displaying training character: %s" % str(self.get_character(self.trial_row, self.trial_col))
+            self.spelled_text.set("Look at: %s" % str(self.get_character(self.trial_row, self.trial_col)))
             # Wait 2 seconds (2000 milliseconds)
             self.master.after(3000, self.update)
 

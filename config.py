@@ -17,7 +17,7 @@ SEQ_PER_TRIAL = 5
 # Sampling rate of the headset in Hz (2000Hz BioSemi (speed 4)) (250Hz OpenBCI)
 SAMPLING_RATE = 250
 # What channels are we using in analysis (specify indices)
-CHANNELS = [0, 1, 2, 3, 4, 5]
+CHANNELS = [0, 1, 2, 3, 4]
 # File path to the pickle file containing the trained classifiers
 CLASSIFIER_FILENAME = 'p300_classifier.pkl'
 # Number of samples that should be in each epoch

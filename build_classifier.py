@@ -127,18 +127,15 @@ if __name__ == '__main__':
     # Feature scale X
     X = preprocessing.scale(X)
 
-    print "Training Linear classifiers."
-    clf1 = svm.SVC(kernel='poly', degree=2, probability=True)
-    clf1 = clf1.fit(X,y)
-    """
-    clf2 = svm.SVC(kernel='poly', degree=2, probability=True)
-    clf3 = svm.SVC(probability=True)
+    print "Training classifiers."
+    clf1 = svm.SVC(kernel='linear', class_weight='balanced', probability=True)
+    clf2 = svm.SVC(kernel='poly', degree=2, class_weight='balanced', probability=True)
+    clf3 = svm.SVC(class_weight={1:0, 1:1}, probability=True)
     eclf1 = VotingClassifier(estimators=[('lin', clf1), ('quad', clf2), ('rbf', clf3)], voting='soft')
     eclf1 = eclf1.fit(X,y)
-    """
     print "Done."
 
-    classifier = clf1
+    classifier = eclf1
 
     scores = cross_val_score(classifier, X, y, cv=10)
     print "Accuracy: %0.2f (+/- %0.2f)" % (scores.mean(), scores.std() * 2)

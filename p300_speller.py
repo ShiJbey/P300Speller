@@ -143,8 +143,8 @@ def get_p300_prediction(clf, average_data, sampling_rate=config.SAMPLING_RATE):
         data = down_sample_data(average_data[index], sampling_rate, target_sample_rate=128)
         data = np.ravel(data)
         predicted_class = clf.predict(np.reshape(data,(1, -1)))
-        #prediction_confidence = clf.predict_proba(np.reshape(data,(1, -1)))[0][1]
-        prediction_confidence = clf.decision_function(np.reshape(data,(1, -1)))[0]
+        prediction_confidence = clf.predict_proba(np.reshape(data,(1, -1)))[0][1]
+        #prediction_confidence = clf.decision_function(np.reshape(data,(1, -1)))[0]
         print "Row/Col: %d" % index
         print "Class: "
         print predicted_class
@@ -177,12 +177,6 @@ if __name__ == '__main__':
                         default=False,
                         help='Runs the gui in live mode and '
                         'loads a classifier for making spelling predictions.')
-    parser.add_argument('-s', '--simulate',
-                        dest="simulation_data_path",
-                        type=str,
-                        nargs=1,
-                        default="",
-                        help='Runs the speller using simulation data')
     parser.add_argument('-c', '--classifier',
                         dest='clf_path',
                         type=str,
@@ -198,7 +192,7 @@ if __name__ == '__main__':
     parser.add_argument('--output-raw',
                         dest="output_raw",
                         action='store_true',
-                        default=True,
+                        default=False,
                         help='Writes the raw data collected to a'
                         'CSV file to be used at a later time.')
     parser.add_argument('--output-epochs',
@@ -218,10 +212,8 @@ if __name__ == '__main__':
     if args.live_mode:
         args.training_mode = False
 
-    if (args.live_mode and args.training_mode or
-        args.training_mode and args.simulation_data_path != '' or
-        args.live_mode and args.simulation_data_path != ''):
-        raise parser.error("Only one mode (train, live, or simulate) may be specified at a time.")
+    if args.live_mode and args.training_mode:
+        raise parser.error("Only one mode (train or live) may be specified at a time.")
 
     #==========================================================#
     #                    Import Classifier                     #
@@ -541,10 +533,12 @@ if __name__ == '__main__':
             #==========================================================#         
 
             # Reset averages to all zeros
+            """
             for i in range(6):
                 row_averages[i] = np.zeros((config.SAMPLES_PER_EPOCH,len(config.CHANNELS)))
                 col_averages[i] = np.zeros((config.SAMPLES_PER_EPOCH,len(config.CHANNELS)))
-            
+            """
+
             # Reset counter
             sequences_complete = 0
             epoch = None
