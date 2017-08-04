@@ -14,10 +14,6 @@ from sklearn.ensemble import VotingClassifier
 import config
 sys.path.append('..')
 
-
-
-SAMPLES_PER_EPOCH = config.EPOCH_LENGTH * config.SAMPLING_RATE
-
 def down_sample_data(data, current_sample_rate, target_sample_rate=128):
     """
     Down samples a given data sample by extracting a subset of the data
@@ -53,11 +49,10 @@ def create_example_cases(average_data, p300_index):
     Given a list of averaged epoch data matrices and index indicating the
     row/col of the expected P300, outputs a set of example cases and classifications
     """
-    X = np.zeros((0, config.MAX_NUM_SAMPLES_POSSIBLE * len(config.CHANNELS)))
-    y = np.array([])
+    X = []
+    y = []
 
     for index in range(len(average_data)):
-        data = down_sample_data(average_data[index], config.SAMPLING_RATE, target_sample_rate=config.DOWN_SAMPLE_TARGET)
         data = np.ravel(average_data[index])
         X = np.vstack((X, data))
         if index == p300_index:
@@ -70,7 +65,7 @@ def create_example_cases(average_data, p300_index):
 
 def get_example_case(filepath):
     """Returns a 2D-numpy array of the sample data from a given file"""
-    data = np.zeros((0, len(config.CHANNELS)))
+    data = np.zeros((0, len(config.EEG_CHANNELS)))
     classification = -1
 
     # Read in data from the csv file
@@ -83,15 +78,7 @@ def get_example_case(filepath):
                 
                 row = np.array(row)
             data = np.vstack((data, row))
-
-    if len(data) < SAMPLES_PER_EPOCH:
-        return np.array([]), -1 
-
-    if len(data) > SAMPLES_PER_EPOCH:
-        data = data[:SAMPLES_PER_EPOCH,:]
     
-    data = down_sample_data(data, config.SAMPLING_RATE, target_sample_rate=128)
-
     data = np.ravel(data)
 
     return data, classification
@@ -103,18 +90,17 @@ if __name__ == '__main__':
     print sys.argv
     directory = sys.argv[1]
 
-    samples_to_skip = int(math.ceil(float(config.SAMPLING_RATE) / 128))
-    num_samples_possible = config.SAMPLING_RATE / samples_to_skip
-    
-    
     # Holds all of the training examples
-    X = np.zeros((0, num_samples_possible * len(config.CHANNELS)))
+    X = np.zeros((0, num_samples_possible * len(config.EEG_CHANNELS)))
     # Holds all of the example classifications
     y = np.array([])
 
     
 
     data_filenames = os.listdir(directory)
+    for fname in data_filenames:
+        if fname.contains("RawData"):
+            data_filenames.remove(fname)
 
     # Generate example set from all of the files in the directory
     for name in sorted(data_filenames):
@@ -130,7 +116,7 @@ if __name__ == '__main__':
     print "Training classifiers."
     clf1 = svm.SVC(kernel='linear', class_weight='balanced', probability=True)
     clf2 = svm.SVC(kernel='poly', degree=2, class_weight='balanced', probability=True)
-    clf3 = svm.SVC(class_weight={1:0, 1:1}, probability=True)
+    clf3 = svm.SVC(class_weight='balanced', probability=True)
     eclf1 = VotingClassifier(estimators=[('lin', clf1), ('quad', clf2), ('rbf', clf3)], voting='soft')
     eclf1 = eclf1.fit(X,y)
     print "Done."

@@ -24,7 +24,7 @@ http://google.github.io/styleguide/pyguide.html
 import os.path as path
 import numpy as np
 import mne
-from eeg_event_codes import *
+import eeg_event_codes
 
 
 from sklearn.pipeline import make_pipeline
@@ -44,18 +44,29 @@ import config
 import argparse
 
 parser = argparse.ArgumentParser(description='Builds a classifier from raw EEG data using the MNE library')
+
+parser.add_argument('classifier_path',
+                    type=str,
+                    nargs=1,
+                    help='Specifies a path for the raw data for making classifier')
+
+parser.add_argument('-t','--train',
+                    dest="train_classifier",
+                    action='store_true',
+                    default=False,
+                    help='Option to train and export classifier')    
+
 parser.add_argument('-p','--plot',
-                        dest="plot_epochs",
-                        action='store_true',
-                        default=False,
-                        help='Displays a plot of the avarage target and non-target epoch data as well as their diffrence')
+                    dest="plot_epochs",
+                    action='store_true',
+                    default=False,
+                    help='Displays a plot of the avarage target and non-target epoch data as well as their diffrence')
+
 args = parser.parse_args()
 
-#import data
-data_path = 'C:\Users\shijb\Desktop\P300Project\csv'
-data_file = 'PRD.csv'
 
-EEG_data = np.genfromtxt(data_path + '\\' + data_file, delimiter=",")
+data_path = args.classifier_path[0]
+EEG_data = np.genfromtxt(data_path, delimiter=",")
 EEG_labels = ['time_stamps', 'event', 'Cz', 'Pz', 'Oz', 'O1', 'O2']
 EEG_types = ['misc', 'stim', 'eeg', 'eeg', 'eeg', 'eeg', 'eeg']
 
@@ -74,87 +85,59 @@ filtered_data = filtered_data.filter( l_freq=None, h_freq=40)
 events = mne.find_events(filtered_data, stim_channel='event', shortest_event=1, consecutive=True)
 filtered_data.drop_channels(['event'])
 
-event_id = {
-    #'non-target/row0':0,
-    'nontarget/row1':1,
-    'nontarget/row2':2,
-    'nontarget/row3':3,
-    'nontarget/row4':4,
-    'nontarget/row5':5,
-    'nontarget/col0':8,
-    'nontarget/col1':9,
-    'nontarget/col2':10,
-    'nontarget/col3':11,
-    'nontarget/col4':12,
-    'nontarget/col5':13,
-    #'target/row0':16,
-    'target/row1':17,
-    'target/row2':18,
-    'target/row3':19,
-    'target/row4':20,
-    'target/row5':21,
-    'target/col0':24,
-    'target/col1':25,
-    'target/col2':26,
-    'target/col3':27,
-    #'target/col4':28,
-    'target/col5':29,
-    'none':32
-    }
 
 
 
-epochs = mne.Epochs(filtered_data, events, event_id=event_id, add_eeg_ref=False, tmin = 0, tmax=1, decim=2)
+
+epochs = mne.Epochs(filtered_data, events, event_id=eeg_event_codes.EVENT_ID, add_eeg_ref=False, tmin = 0, tmax=1, decim=config.DOWN_SAMPLE_FACTOR)
 epochs.load_data()
 
-X = []
-y = []
 
-# Creating example cases for training/classification
-X_target = epochs['target'].pick_channels(['Cz']).get_data()
-X_nontarget = epochs['nontarget'].pick_channels(['Cz']).get_data()
+if args.train_classifier:
 
-print np.shape(X_target)
-print np.shape(X_nontarget)
+    X = []
+    y = []
 
-for ep in X_target:
-    ep =  ep[:,0:-1]
-    X.append(np.ravel(ep))
-    y.append(1)
+    # Creating example cases for training/classification
+    X_target = epochs['target'].pick_channels(config.CHANNELS_FOR_SVC).get_data()
+    X_nontarget = epochs['nontarget'].pick_channels(config.CHANNELS_FOR_SVC).get_data()
 
-for ep in X_nontarget:
-    ep =  ep[:,0:-1]
-    X.append(np.ravel(ep))
-    y.append(0)
+    for ep in X_target:
+        ep =  ep[:,0:]
+        X.append(np.ravel(ep))
+        y.append(1)
 
-print np.shape(X)
-print np.shape(y)
+    for ep in X_nontarget:
+        ep =  ep[:,0:]
+        X.append(np.ravel(ep))
+        y.append(0)
 
-X = np.matrix(X)
-y = np.array(y)
+    X = np.matrix(X)
+    y = np.array(y)
 
-clf1 = svm.SVC(kernel='poly', probability=True)
-clf2 = svm.SVC(kernel='poly', degree=2, probability=True)
-clf3 = svm.SVC(probability=True)
-eclf1 = VotingClassifier(estimators=[('deg3', clf1), ('quad', clf2), ('rbf', clf3)], voting='soft')
-#eclf1 = #eclf1.fit(np.matrix(X),np.array(y))
+    clf1 = svm.SVC(kernel='linear', class_weight='balanced', probability=True)
+    clf2 = svm.SVC(kernel='poly', degree=2, class_weight='balanced', probability=True)
+    clf3 = svm.SVC(class_weight='balanced', probability=True)
+    eclf1 = VotingClassifier(estimators=[('deg3', clf1), ('quad', clf2), ('rbf', clf3)], voting='soft')#eclf1 = #eclf1.fit(np.matrix(X),np.array(y))
 
 
-classifier = clf3
+    classifier = eclf1
 
-scores = cross_val_score(classifier, X, y, cv=2)
-print "Accuracy: %0.2f (+/- %0.2f)" % (scores.mean(), scores.std() * 2)
-classifier.fit(X,y)
+    print "Cross Validating Ensemble"
+    scores = cross_val_score(classifier, X, y, cv=2)
+    print "Accuracy: %0.2f (+/- %0.2f)" % (scores.mean(), scores.std() * 2)
+    print "Training classifier"
+    classifier.fit(X,y)
+    print "Done"
 
-outfile = open("mne_classifier.pkl", 'wb+')
-pickle.dump(classifier, outfile)
-outfile.close()
-
-
+    print "Exporting classifiers"
+    outfile = open("mne_classifier.pkl", 'wb+')
+    pickle.dump(classifier, outfile)
+    outfile.close()
+    print "Done"
 
 if args.plot_epochs:
     picks = mne.pick_types(filtered_data.info, eeg=True, stim=False, eog=False)
-    epochs_xd = mne.Epochs(filtered_data, events, event_id=event_id, add_eeg_ref=False, tmin = 0, tmax=1, picks=picks, baseline=None)
     evoked = epochs.average()
     picks = mne.pick_channels(evoked.ch_names, ['O1'])
     evoked_target = epochs['target'].average()

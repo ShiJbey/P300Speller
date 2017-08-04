@@ -2,8 +2,6 @@
 Constants used in running the p300_speller module
 or any of its associated modules
 """
-import math
-
 #======================================================#
 #               DATA/TRAINING SETTINGS                 #
 #======================================================#
@@ -11,23 +9,19 @@ import math
 # Length of an EEG epoch in seconds
 EPOCH_LENGTH = 1
 # How many letters are used in training
-NUM_TRIALS = 50
+NUM_TRIALS = 36
 # How any flashes of all rows and columns, sequence, per trial
-SEQ_PER_TRIAL = 5
+SEQ_PER_TRIAL = 7
 # Sampling rate of the headset in Hz (2000Hz BioSemi (speed 4)) (250Hz OpenBCI)
 SAMPLING_RATE = 250
 # What channels are we using in analysis (specify indices)
-CHANNELS = [0, 1, 2, 3, 4]
+EEG_CHANNELS = ['Cz', 'P3', 'Pz', 'P4', 'POz']
+EEG_TYPES = ['eeg', 'eeg', 'eeg', 'eeg', 'eeg']
+CHANNELS_FOR_SVC = ['Pz']
 # File path to the pickle file containing the trained classifiers
 CLASSIFIER_FILENAME = 'p300_classifier.pkl'
-# Number of samples that should be in each epoch
-SAMPLES_PER_EPOCH = EPOCH_LENGTH * SAMPLING_RATE
-# Sampling rate to down sample data to
-DOWN_SAMPLE_TARGET = 128
-# Samples in the raw data to skip in order to get desired sample rate
-SAMPLES_TO_SKIP = int(math.ceil(float(SAMPLING_RATE) / DOWN_SAMPLE_TARGET))
-# Max number of samples an epoch may have after down sampling
-MAX_NUM_SAMPLES_POSSIBLE = (SAMPLING_RATE * EPOCH_LENGTH) / SAMPLES_TO_SKIP
+# Down sample factor
+DOWN_SAMPLE_FACTOR = 1
 
 #======================================================#
 #                    DATA FILTERING                    #
@@ -39,8 +33,6 @@ FILTER_DATA = True
 HIGHPASS_CUTOFF = .1
 # High cut-off frequency value (Hz)
 LOWPASS_CUTOFF = 60
-# Order of the filter
-FILTER_ORDER = 3
 
 #======================================================#
 #                   GUI SETTINGS                       #
@@ -70,12 +62,3 @@ GRID_BG_COLOR = '#000000'
 
 # Output directory
 CSV_DIRECTORY = 'csv'
-
-#======================================================#
-#             DATA VISUALIZATION SETTINGS              #
-#======================================================#
-
-# When visualizing our epochs do we want to dislay the individual epochs
-DISPLAY_TRIALS = False
-# When visualizing epochs do we want to display the average
-DISPLAY_AVERAGE = True

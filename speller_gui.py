@@ -3,10 +3,10 @@ import random
 import Tkinter as tk
 from Tkinter import *
 import pylsl
-from epoch import Epoch
+from eeg_event_codes import encode_event
 import config
 
-def run_gui(row_epoch_queue, col_epoch_queue, pipe_conn, is_training):
+def run_gui(event_queue, pipe_conn, is_training, verbose):
     """Starts the p300 speller gui"""
     root = tk.Tk()
     root.title("P300 Speller")
@@ -14,10 +14,10 @@ def run_gui(row_epoch_queue, col_epoch_queue, pipe_conn, is_training):
     root.geometry('{}x{}'.format(config.GRID_WIDTH + 200, config.GRID_WIDTH + 200))
     root.resizable(width=False, height=False)
     speller_gui = P300GUI(root,
-                            row_epoch_queue,
-                            col_epoch_queue,
-                            pipe_conn,
-                            is_training)
+                          event_queue,
+                          pipe_conn,
+                          is_training,
+                          verbose=verbose)
     start_screen = StartScreen(root, speller_gui)
     start_screen.display_screen()
     root.mainloop()
@@ -218,23 +218,28 @@ class StartScreen(tk.Frame):
         self.next_screen.display_screen()
         self.next_screen.update()
         self.remove_screen()
-        
-    
+
+
 class P300GUI(tk.Frame):
     """The main screen of the application that displays the character grid and spelling buffer"""
-    def __init__(self, master, row_epoch_queue, col_epoch_queue, character_pipe, is_training,
-        highlight_time=config.HIGHLIGHT_TIME, intermediate_time=config.INTERMEDIATE_TIME):
+    def __init__(self, master, event_queue, character_pipe, is_training, verbose=False,
+                 highlight_time=config.HIGHLIGHT_TIME, intermediate_time=config.INTERMEDIATE_TIME):
         tk.Frame.__init__(self, master)
-        self.row_epoch_queue = row_epoch_queue      # Reference to the queue of row epochs shared with main process
-        self.col_epoch_queue = col_epoch_queue      # Reference to the queue of col epochs shared with main process
-        self.is_training = is_training              # Boolean value indicating if we are in training mode
-        self.selection_rect = self.make_rectangle()      # Selection rectangle used in the GUI
+        self.event_queue = event_queue      # Reference to the queue of event-time/event-code tuples
+        self.is_training = is_training      # Boolean value indicating if we are in training mode
+        self.verbose = verbose              # Should the gui print output to the console
         self.highlight_time = highlight_time        # How long the highlight rectangle will be present
         self.intermediate_time = intermediate_time  # Length of time between presentations of the highlight rectangle
+        self.col_width = config.GRID_WIDTH / 6
+        self.selection_rect = self.make_rectangle() # Selection rectangle used in the GUI
         self.canvas = tk.Canvas(self)               # Reference to the cavas where the characters and rect are drawn
-        self.spelled_text = tk.StringVar()             # String var used to manage the word(s) being spelled
+        self.spelled_text = tk.StringVar()          # String var used to manage the word(s) being spelled
         self.spelled_text.set("")
-        self.text_buffer = tk.Entry(self, font=("Arial", 24, "bold"), cursor="arrow", insertbackground="#ffffff", textvariable=self.spelled_text)
+        self.text_buffer = tk.Entry(self,
+                                    font=("Arial", 24, "bold"),
+                                    cursor="arrow",
+                                    insertbackground="#ffffff",
+                                    textvariable=self.spelled_text)
         self.character_pipe = character_pipe;   
         self.predicted_row = -1
         self.predicted_col = -1               
@@ -245,27 +250,27 @@ class P300GUI(tk.Frame):
         self.trial_in_progress = False
         self.epochs_made = 0
         self.char_highlighted = False            
-        col_width = config.GRID_WIDTH / 6
-        self.char_select_rect = SelectionRectangle(x=col_width * self.trial_col, y=col_width * self.trial_row,
-                                width=col_width,
-                                length=col_width,
+        
+        self.char_select_rect = SelectionRectangle(x=self.col_width * self.trial_col, y=self.col_width * self.trial_row,
+                                width=self.col_width,
+                                length=self.col_width,
                                 color=config.CHAR_SELECT_COLOR,
                                 max_x=config.GRID_WIDTH,
                                 max_y=config.GRID_WIDTH) 
-        self.create_widgets()                       
+        self.create_widgets()                      
         
         
     def display_screen(self):
         """Adds this screen to the window"""
-        #self.grid(padx=30,pady=30)
         self.place(relx=0.5, rely=0.5, anchor=CENTER)
 
     def remove_screen(self):
         """Removes this screen from the window"""
-        self.grid_remove()
+        self.place_forget()
 
     def update(self):
         """Updates the gui based on the mode the application is in"""
+        # Moves the selection rect off-screen
         self.selection_rect.move_to_col(-2)
         if self.is_training:
             self.training_update()
@@ -283,13 +288,15 @@ class P300GUI(tk.Frame):
             
             # Get row and column of character to be highlighted for training
             if self.trial_col == -1 and self.trial_row == -1:
-                print "Waiting to receive next training character..."
+                if self.verbose:
+                    print "Waiting to receive next training character..."
                 msg = self.character_pipe.recv()
-                if msg[0] == 'train':
-                    self.trial_row = msg[2]
-                msg = self.character_pipe.recv()
-                if msg[0] == 'train':
-                    self.trial_col = msg[2]
+                msg_intent = msg[0]
+                msg_content = msg[1]
+                if msg_intent == 'train':
+                    self.trial_row = msg_content[0]
+                    self.trial_col = msg_content[1]
+                    
 
             # Move the char highlight rect behind the character
             self.char_select_rect.move_to_col(self.trial_col, reset_top=False)
@@ -299,7 +306,8 @@ class P300GUI(tk.Frame):
             self.char_highlighted = True
             self.trial_in_progress = True
             self.draw()
-            print "Displaying training character: %s" % str(self.get_character(self.trial_row, self.trial_col))
+            if self.verbose:
+                print "Displaying training character: %s" % str(self.get_character(self.trial_row, self.trial_col))
             self.spelled_text.set("Look at: %s" % str(self.get_character(self.trial_row, self.trial_col)))
             # Wait 2 seconds (2000 milliseconds)
             self.master.after(3000, self.update)
@@ -310,8 +318,8 @@ class P300GUI(tk.Frame):
             if self.char_highlighted:
                 self.char_highlighted = False
                 self.draw()
-                print "Removed character highlight"
-                print "Starting Trial # %d" % self.trial_count
+                if self.verbose:
+                    print "Starting Trial # %d" % self.trial_count
 
             # Proceed updating like normal
             if self.selection_rect.visible:
@@ -331,7 +339,8 @@ class P300GUI(tk.Frame):
                 self.selection_rect.visible = True
 
                 if self.selection_rect.end_of_sequence():
-                    print "Ending Sequence %d" % self.sequence_count
+                    if self.verbose:
+                        print "Ending Sequence %d" % self.sequence_count
                     self.sequence_count += 1
                     if self.sequence_count >= config.SEQ_PER_TRIAL:
                         self.trial_count += 1
@@ -368,26 +377,29 @@ class P300GUI(tk.Frame):
             # Set visibility to visible for next update call
             self.selection_rect.visible = True
             if self.selection_rect.end_of_sequence():
-                print "Ending Sequence %d" % self.sequence_count
+                if self.verbose:
+                    print "Ending Sequence %d" % self.sequence_count
                 self.sequence_count += 1
                 if self.sequence_count >= config.SEQ_PER_TRIAL:
                     self.sequence_count = 0
                     # Read from pipes for prediction
                     msg = self.character_pipe.recv()
-                    if msg[0] == 'prediction':
-                        self.predicted_row = msg[2]
-                    msg = self.character_pipe.recv()
-                    if msg[0] == 'prediction':
-                        self.predicted_col = msg[2]
-                    print "Predicted Row: %d, Predicted Col: %d" % (self.predicted_row, self.predicted_col)
+                    msg_intent = msg[0]
+                    msg_content = msg[1]
+                    if msg_intent == 'prediction':
+                        self.predicted_row = msg_content[0]
+                        self.predicted_col = msg_content[1]
+                    if self.verbose:
+                        print "Predicted Row: %d, Predicted Col: %d" % (self.predicted_row, self.predicted_col)
                     predicted_char = self.get_character(self.predicted_row, self.predicted_col)
-                    self.add_char(predicted_char)
+                    self.add_text(predicted_char)
                 self.master.after(config.EPOCH_LENGTH * 1000 + self.intermediate_time, self.update)
             else:
                 # Keep the rect invisible for a set amount of time
                 self.master.after(self.intermediate_time, self.update)
     
     def get_character(self, row, col):
+        """Returns the character from the grid at the given row and column"""
         cell_num = (row * 6) + col
         if cell_num <= 25:
             return chr(65 + cell_num)
@@ -406,40 +418,45 @@ class P300GUI(tk.Frame):
         self.draw_characters()
 
     def send_epoch(self):
-        """Send a new epoch to the main process"""
+        """Sends epoch event codes and times to the main process"""
+        # Start time for the event
+        start_time = pylsl.local_clock()
+        # Details for creating an event code
+        index = self.selection_rect.get_index()
+        orientation = ''
+        is_p300 = False
+
         if self.selection_rect.is_vertical():
-            index = self.selection_rect.get_index()
-            epoch = Epoch(False, index, pylsl.local_clock())
-            epoch.is_p300 = index == self.trial_col
-            self.col_epoch_queue.put_nowait(epoch)
+            orientation = 'col'
+            is_p300 = index == self.trial_col
         else:
-            index = self.selection_rect.get_index()
-            epoch = Epoch(True, index, pylsl.local_clock())
-            epoch.is_p300 = index == self.trial_row
-            self.row_epoch_queue.put_nowait(epoch)        
+            orientation = 'row'
+            is_p300 = index == self.trial_row
+
+        event_code = encode_event(orientation, index, is_p300=is_p300)
+        # Send the start time and the event code to the main process
+        self.event_queue.put_nowait((start_time, event_code))
 
     def make_rectangle(self, orientation="vertical"):
         """Returns a new selection rectangle for this GUI"""
-        col_width = config.GRID_WIDTH / 6
         if orientation == "vertical":
             return SelectionRectangle(x=0, y=0,
-                                    width=col_width,
-                                    length=config.GRID_WIDTH,
-                                    color=config.RECT_COLOR,
-                                    max_x=config.GRID_WIDTH,
-                                    max_y=config.GRID_WIDTH)
+                                      width=self.col_width,
+                                      length=config.GRID_WIDTH,
+                                      color=config.RECT_COLOR,
+                                      max_x=config.GRID_WIDTH,
+                                      max_y=config.GRID_WIDTH)
         else:
             return SelectionRectangle(x=0, y=0,
-                                    width=config.GRID_WIDTH,
-                                    length=col_width,
-                                    color=config.RECT_COLOR,
-                                    max_x=config.GRID_WIDTH,
-                                    max_y=config.GRID_WIDTH)
+                                      width=config.GRID_WIDTH,
+                                      length=self.col_width,
+                                      color=config.RECT_COLOR,
+                                      max_x=config.GRID_WIDTH,
+                                      max_y=config.GRID_WIDTH)
 
     def draw_characters(self):
         """Draws 36 characters [a-z] and [0-9] in a 6x6 grid"""
         row_height = int(self.canvas["height"]) / 6
-        col_width = int(self.canvas["width"]) / 6
         
         # Draw the characters to the canvas
         ascii_letter_offset = 65
@@ -459,29 +476,34 @@ class P300GUI(tk.Frame):
                 # Get the current cell character
                 cell_char = chr(ascii_offset + current_offset)
                 current_offset += 1
-                canvas_id = self.canvas.create_text((col_width * col) + (col_width / 2.5),
-                        (row_height * row) + (row_height / 3), font=("Arial", (col_width / 4),"bold"), anchor="nw")
-                
+                canvas_id = self.canvas.create_text((self.col_width * col) + (self.col_width / 2.5),
+                                                    (row_height * row) + (row_height / 3),
+                                                    font=("Arial", (self.col_width / 4), "bold"),
+                                                    anchor="nw")
+
                 # Determine if this character is printed white or black
-                if (self.selection_rect != None):
+                if self.selection_rect != None:
                     if ((self.selection_rect.is_vertical() and col == self.selection_rect.get_index()
-                        or not self.selection_rect.is_vertical() and row == self.selection_rect.get_index())
-                        and self.selection_rect.visible):
+                         or not self.selection_rect.is_vertical() and row == self.selection_rect.get_index())
+                         and self.selection_rect.visible):
                         self.canvas.itemconfig(canvas_id, text=cell_char, fill=config.HIGHLIGHT_CHAR_COLOR)
                     else:
                         self.canvas.itemconfig(canvas_id, text=cell_char, fill=config.DEFAULT_CHAR_COLOR)
 
     def add_space(self):
+        """Adds a space '_' to the spelled text buffer"""
         self.spelled_text.set(self.spelled_text.get() + "_")
         self.text_buffer.icursor(len(self.spelled_text.get()))
 
     def delete_last(self):
+        """Deletes the last character in the spelled text buffer"""
         if len(self.spelled_text.get()) > 0:
             self.spelled_text.set(self.spelled_text.get()[:-1])
             self.text_buffer.icursor(len(self.spelled_text.get()))
     
-    def add_char(self, c):
-        self.spelled_text.set(self.spelled_text.get() + c)
+    def add_text(self, text):
+        """Appends some given text to the sppelled text buffer"""
+        self.spelled_text.set(self.spelled_text.get() + text)
         self.text_buffer.icursor(len(self.spelled_text.get()))
 
     def create_widgets(self):
@@ -489,7 +511,6 @@ class P300GUI(tk.Frame):
         self.master["bg"] = '#001c33'
         self["bg"] = '#001c33'
         # Displays the current text being typed
-        
         self.text_buffer.grid(row=0, pady=20, sticky=tk.W+tk.E)
         self.text_buffer["fg"] = '#ffffff'
         self.text_buffer["bg"] = '#000000'
